@@ -243,7 +243,7 @@ export default function VMDetail() {
           </div>
 
           {/* Attach ISO — placed prominently at the top */}
-          <AttachISOSection uuid={uuid} isRunning={isRunning} onDone={load} onError={setError} />
+          <AttachISOSection uuid={uuid} vm={vm} isRunning={isRunning} onDone={load} onError={setError} />
 
           {/* Disk */}
           {vm?.disk_size && (
@@ -440,23 +440,28 @@ export default function VMDetail() {
   )
 }
 
-function AttachISOSection({ uuid, isRunning, onDone, onError }: {
-  uuid: string; isRunning: boolean;
+function AttachISOSection({ uuid, vm, isRunning, onDone, onError }: {
+  uuid: string; vm: any; isRunning: boolean;
   onDone: () => void; onError: (msg: string) => void;
 }) {
   const [isos, setIsos] = useState<any[]>([])
   const [selected, setSelected] = useState('')
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [msg, setMsg] = useState('')
 
   useEffect(() => {
     api.vms.isos().then(setIsos).catch(() => {})
   }, [])
 
+  const attachedISO = vm?.iso || ''
+
   async function attach() {
     setBusy(true)
+    setMsg('')
     try {
       await api.vms.attachISO(uuid, selected)
+      setMsg(`Attached: ${selected}`)
       onDone()
     } catch (e: any) { onError(e.message) }
     finally { setBusy(false) }
@@ -464,8 +469,10 @@ function AttachISOSection({ uuid, isRunning, onDone, onError }: {
 
   async function detach() {
     setBusy(true)
+    setMsg('')
     try {
       await api.vms.attachISO(uuid, '')
+      setMsg('ISO detached')
       onDone()
     } catch (e: any) { onError(e.message) }
     finally { setBusy(false) }
@@ -478,6 +485,7 @@ function AttachISOSection({ uuid, isRunning, onDone, onError }: {
     try {
       await api.vms.uploadISO(file)
       setIsos(await api.vms.isos())
+      setMsg(`Uploaded: ${file.name}`)
     } catch (err: any) { onError(err.message) }
     finally { setUploading(false); e.target.value = '' }
   }
@@ -485,13 +493,19 @@ function AttachISOSection({ uuid, isRunning, onDone, onError }: {
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4">
       <div className="mb-3 text-xs uppercase tracking-wide text-gray-500">Boot Media</div>
-      <p className="mb-3 text-sm text-gray-600">
-        Attach an ISO to install an operating system. The VM must be shut down.
-      </p>
+      {attachedISO && (
+        <div className="mb-3 flex items-center gap-2 rounded bg-green-50 px-3 py-2 text-sm text-green-700">
+          <span className="h-2 w-2 rounded-full bg-green-500" />
+          Attached: <span className="font-medium">{attachedISO}</span>
+        </div>
+      )}
+      {!attachedISO && (
+        <p className="mb-3 text-sm text-gray-500">No ISO attached. Select one below to boot from an installer.</p>
+      )}
       <div className="flex items-center gap-3">
         <select value={selected} onChange={(e) => setSelected(e.target.value)} className={`${inputCls} flex-1`}
           disabled={isRunning}>
-          <option value="">No ISO selected</option>
+          <option value="">Select an ISO...</option>
           {isos.map((iso) => (
             <option key={iso.name} value={iso.name}>{iso.name} ({fmtBytes(iso.size)})</option>
           ))}
@@ -507,6 +521,9 @@ function AttachISOSection({ uuid, isRunning, onDone, onError }: {
           <input type="file" accept=".iso" onChange={upload} className="hidden" />
         </label>
       </div>
+      {msg && (
+        <div className="mt-3 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">{msg}</div>
+      )}
     </div>
   )
 }

@@ -136,6 +136,7 @@ type DomainInfo struct {
 	Memory    uint64 `json:"memory"`
 	VNC       int    `json:"vnc_port"`
 	Autostart bool   `json:"autostart"`
+	ISO       string `json:"iso,omitempty"` // currently attached CDROM ISO filename
 }
 
 // DomainStat is a live resource snapshot for one VM.
@@ -241,6 +242,12 @@ func (s *Service) domainInfo(ctx context.Context, d libvirt.Domain) (DomainInfo,
 				Type string `xml:"type,attr"`
 				Port int    `xml:"port,attr"`
 			} `xml:"graphics"`
+			Disks []struct {
+				Device string `xml:"device,attr"`
+				Source struct {
+					File string `xml:"file,attr"`
+				} `xml:"source"`
+			} `xml:"disk"`
 		} `xml:"devices"`
 	}
 	if err := xml.Unmarshal([]byte(xmlDesc), &domXML); err != nil {
@@ -250,6 +257,14 @@ func (s *Service) domainInfo(ctx context.Context, d libvirt.Domain) (DomainInfo,
 	for _, g := range domXML.Devices.Graphics {
 		if g.Type == "vnc" {
 			vnc = g.Port
+		}
+	}
+	// Find attached ISO (cdrom device).
+	iso := ""
+	for _, dk := range domXML.Devices.Disks {
+		if dk.Device == "cdrom" && dk.Source.File != "" {
+			iso = filepath.Base(dk.Source.File)
+			break
 		}
 	}
 	autostart, err := s.l.DomainGetAutostart(d)
@@ -264,6 +279,7 @@ func (s *Service) domainInfo(ctx context.Context, d libvirt.Domain) (DomainInfo,
 		Memory:    domXML.Memory * 1024, // libvirt returns KiB, convert to bytes
 		VNC:       vnc,
 		Autostart: autostart == 1,
+		ISO:       iso,
 	}, nil
 }
 
