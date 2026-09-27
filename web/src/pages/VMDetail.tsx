@@ -163,13 +163,16 @@ export default function VMDetail() {
           )}
           {isRunning && (
             <>
-              <button onClick={() => act('shutdown')} disabled={!!busy} className={btnAction('bg-yellow-100 text-yellow-700')}>
+              <button onClick={() => act('shutdown')} disabled={!!busy} className={btnAction('bg-yellow-100 text-yellow-700')} title="Sends ACPI shutdown signal (requires guest OS)">
                 {busy === 'shutdown' ? <Spinner /> : 'Shutdown'}
               </button>
               <button onClick={() => act('reboot')} disabled={!!busy} className={btnAction('bg-blue-100 text-blue-700')}>
                 {busy === 'reboot' ? <Spinner /> : 'Reboot'}
               </button>
-              <button onClick={() => act('force-stop')} disabled={!!busy} className={btnAction('bg-orange-100 text-orange-700')}>
+              <button onClick={async () => {
+                if (!confirm('Force stop will immediately kill the VM without saving state. Continue?')) return
+                await act('force-stop')
+              }} disabled={!!busy} className={btnAction('bg-red-100 text-red-700')} title="Immediately stops the VM (use if Shutdown does not work)">
                 {busy === 'force-stop' ? <Spinner /> : 'Force stop'}
               </button>
             </>
