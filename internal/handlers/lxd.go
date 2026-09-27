@@ -769,3 +769,40 @@ func parseUpdateOutput(out string) lxdUpdateResult {
 	}
 	return res
 }
+
+// LXDInstanceLogs returns the last N lines of syslog/dmesg from inside an instance.
+func (h *Handlers) LXDInstanceLogs(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	name := r.PathValue("name")
+	lines := r.URL.Query().Get("lines")
+	if lines == "" {
+		lines = "200"
+	}
+	// Try syslog first, fall back to dmesg.
+	out, err := h.deps.LXD.ExecOutput(r.Context(), name, []string{"sh", "-c", "cat /var/log/syslog 2>/dev/null || journalctl --no-pager -n " + lines + " 2>/dev/null || dmesg 2>/dev/null || echo 'No logs available'"})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	_, _ = w.Write([]byte(out))
+}
+
+// LXDInstanceProcesses returns the process list from inside an instance.
+func (h *Handlers) LXDInstanceProcesses(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	name := r.PathValue("name")
+	out, err := h.deps.LXD.ExecOutput(r.Context(), name, []string{"sh", "-c", "ps aux --sort=-pcpu 2>/dev/null || ps aux 2>/dev/null || echo 'ps not available'"})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	_, _ = w.Write([]byte(out))
+}

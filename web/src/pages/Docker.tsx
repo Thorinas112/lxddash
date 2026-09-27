@@ -500,9 +500,21 @@ export default function Docker() {
         />
       )}
       {logsId && (
-        <Modal title={`Logs — ${logsId.slice(0, 12)}`} onClose={() => setLogsId(null)}>
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded bg-black/50 p-3 text-xs text-green-300">
-            {logs || 'Loading…'}
+        <Modal title={`Logs — ${containers.find((c) => c.Id === logsId)?.Names[0]?.replace(/^\//, '') || logsId.slice(0, 12)}`} onClose={() => setLogsId(null)}>
+          <div className="mb-3 flex items-center gap-2">
+            <button onClick={() => openLogs(logsId)} className="rounded bg-gray-200 px-2 py-1 text-xs text-gray-700 hover:bg-gray-300">Refresh</button>
+            <select onChange={async (e) => {
+              const tail = e.target.value
+              setLogs('')
+              try { setLogs(await api.docker.logs(logsId, tail)) } catch {}
+            }} className="rounded border border-gray-300 bg-white px-2 py-1 text-xs">
+              <option value="200">Last 200 lines</option>
+              <option value="500">Last 500 lines</option>
+              <option value="1000">Last 1000 lines</option>
+            </select>
+          </div>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded bg-gray-900 p-4 font-mono text-xs leading-relaxed text-green-300">
+            {logs || 'Loading...'}
           </pre>
         </Modal>
       )}

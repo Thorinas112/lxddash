@@ -30,7 +30,7 @@ function fmtCPUTime(ns: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-type Tab = 'overview' | 'configuration' | 'devices' | 'snapshots' | 'backups' | 'files' | 'graphs'
+type Tab = 'overview' | 'configuration' | 'devices' | 'snapshots' | 'backups' | 'files' | 'graphs' | 'logs' | 'processes'
 type ConfigTab = 'boot' | 'cloud-init' | 'limits' | 'security' | 'migration' | 'raw'
 type DeviceTab = 'disk' | 'gpu' | 'network' | 'proxy' | 'unix'
 
@@ -51,6 +51,8 @@ export default function LXDInstance() {
   const [updates, setUpdates] = useState<any>(null)
   const [editingConfig, setEditingConfig] = useState<Record<string, string>>({})
   const [saveBusy, setSaveBusy] = useState(false)
+  const [logsText, setLogsText] = useState('')
+  const [processesText, setProcessesText] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -93,6 +95,10 @@ export default function LXDInstance() {
   useEffect(() => { if (tab === 'snapshots') loadSnapshots() }, [tab, loadSnapshots])
   useEffect(() => { if (tab === 'backups') loadBackups() }, [tab, loadBackups])
   useEffect(() => { if (tab === 'files') loadFiles() }, [tab, loadFiles])
+  useEffect(() => {
+    if (tab === 'logs') { api.lxd.logs(name).then(setLogsText).catch(() => setLogsText('No logs available')) }
+    if (tab === 'processes') { api.lxd.processes(name).then(setProcessesText).catch(() => setProcessesText('No process data')) }
+  }, [tab, name])
   useEffect(() => { loadUpdates() }, [loadUpdates])
 
   async function act(action: 'start' | 'stop' | 'restart') {
@@ -153,6 +159,8 @@ export default function LXDInstance() {
     { key: 'snapshots', label: 'Snapshots' },
     { key: 'backups', label: 'Backups' },
     { key: 'files', label: 'Files' },
+    { key: 'logs', label: 'Logs' },
+    { key: 'processes', label: 'Processes' },
     { key: 'graphs', label: 'Graphs' },
   ]
 
@@ -726,6 +734,34 @@ export default function LXDInstance() {
               <pre className="max-h-80 overflow-auto rounded border border-gray-200 bg-gray-900 p-3 font-mono text-xs text-gray-300">{filesContent}</pre>
             </div>
           )}
+        </div>
+      )}
+
+      {/* === LOGS TAB === */}
+      {tab === 'logs' && (
+        <div className="rounded-lg border border-gray-200 bg-white">
+          <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+            <span className="text-sm font-medium text-gray-700">System logs</span>
+            <button onClick={() => api.lxd.logs(name).then(setLogsText).catch(() => setLogsText('No logs available'))}
+              className="rounded bg-gray-200 px-2 py-1 text-xs text-gray-700 hover:bg-gray-300">Refresh</button>
+          </div>
+          <pre className="max-h-[500px] overflow-auto bg-gray-900 p-4 font-mono text-xs leading-relaxed text-green-300">
+            {logsText || 'Loading logs...'}
+          </pre>
+        </div>
+      )}
+
+      {/* === PROCESSES TAB === */}
+      {tab === 'processes' && (
+        <div className="rounded-lg border border-gray-200 bg-white">
+          <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+            <span className="text-sm font-medium text-gray-700">Running processes</span>
+            <button onClick={() => api.lxd.processes(name).then(setProcessesText).catch(() => setProcessesText('No process data'))}
+              className="rounded bg-gray-200 px-2 py-1 text-xs text-gray-700 hover:bg-gray-300">Refresh</button>
+          </div>
+          <pre className="max-h-[500px] overflow-auto bg-gray-900 p-4 font-mono text-xs leading-relaxed text-green-300">
+            {processesText || 'Loading processes...'}
+          </pre>
         </div>
       )}
 

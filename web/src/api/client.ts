@@ -159,6 +159,8 @@ export const api = {
     update: (name: string, body: any) =>
       request<any>(`/lxd/instances/${name}`, { method: 'PATCH', body: JSON.stringify(body) }),
     updates: (name: string) => request<any>(`/lxd/instances/${encodeURIComponent(name)}/updates`),
+    logs: (name: string) => request<string>(`/lxd/instances/${encodeURIComponent(name)}/logs`),
+    processes: (name: string) => request<string>(`/lxd/instances/${encodeURIComponent(name)}/processes`),
     snapshots: (name: string) => request<any[]>(`/lxd/instances/${name}/snapshots`),
     createSnapshot: (name: string, snapshot: string) =>
       request<any>(`/lxd/instances/${name}/snapshots`, {
