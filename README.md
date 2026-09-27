@@ -64,7 +64,7 @@ make backend
 On a fresh Ubuntu/Debian server, run this single command:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/machomeandgardens-a11y/lxddash/master/deploy/quick-install.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/Thorinas112/lxddash/master/deploy/quick-install.sh | sudo bash
 ```
 
 This installs Docker, LXD, libvirt/KVM, downloads the latest binary, creates

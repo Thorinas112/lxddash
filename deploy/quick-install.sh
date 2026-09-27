@@ -14,7 +14,7 @@
 #
 set -euo pipefail
 
-REPO="${LXDDASH_REPO:-machomeandgardens-a11y/lxddash}"
+REPO="${LXDDASH_REPO:-Thorinas112/lxddash}"
 VERSION="${LXDDASH_VERSION:-latest}"
 PORT="${LXDDASH_PORT:-8080}"
 INSTALL_DIR="/usr/local/bin"
