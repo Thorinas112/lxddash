@@ -115,7 +115,14 @@ export default function LXDInstance() {
 
   const cfg = inst.config || {}
   const devices = inst.devices || {}
-  const netDevices = Object.entries(devices).filter(([, d]: [string, any]) => d.type === 'nic' || d.network)
+  // Network devices may come from instance config OR be visible in state.
+  // Merge both sources so inherited profile devices show up.
+  const netDevices = [
+    ...Object.entries(devices).filter(([, d]: [string, any]) => d.type === 'nic' || d.network),
+    ...Object.keys(state?.network || {})
+      .filter((iface) => iface !== 'lo' && !Object.keys(devices).includes(iface))
+      .map((iface) => [iface, { type: 'nic', _source: 'state' }]),
+  ]
   const diskDevices = Object.entries(devices).filter(([, d]: [string, any]) => d.type === 'disk' || d.path)
   const gpuDevices = Object.entries(devices).filter(([, d]: [string, any]) => d.type === 'gpu')
   const proxyDevices = Object.entries(devices).filter(([, d]: [string, any]) => d.type === 'proxy')
@@ -508,12 +515,12 @@ export default function LXDInstance() {
                   deviceTab === 'gpu' ? gpuDevices :
                   deviceTab === 'proxy' ? proxyDevices :
                   unixDevices
-                ).map(([devName, dev]: [string, any]) => (
+                ).map(([devName, dev]: any) => (
                   <tr key={devName} className="bg-white">
                     <td className="px-4 py-2 font-medium text-gray-900">{devName}</td>
                     <td className="px-4 py-2 text-gray-600">{dev.type || '--'}</td>
-                    {deviceTab === 'network' && <td className="px-4 py-2 text-gray-600">{dev.network || '--'}</td>}
-                    {deviceTab === 'network' && <td className="px-4 py-2 text-gray-600">{dev['ipv4.address'] || 'DHCP'}</td>}
+                    {deviceTab === 'network' && <td className="px-4 py-2 text-gray-600">{dev.network || (dev._source === 'state' ? '(profile)' : '--')}</td>}
+                    {deviceTab === 'network' && <td className="px-4 py-2 text-gray-600">{dev['ipv4.address'] || state?.network?.[devName]?.addresses?.find((a: any) => a.family === 'inet')?.address || 'DHCP'}</td>}
                     {deviceTab === 'disk' && <td className="px-4 py-2 text-gray-600">{dev.path || '--'}</td>}
                     {deviceTab === 'disk' && <td className="px-4 py-2 text-gray-600">{dev.pool || '--'}</td>}
                     {deviceTab === 'gpu' && <td className="px-4 py-2 text-gray-600">{dev.vendor || '--'}</td>}
