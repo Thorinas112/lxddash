@@ -14,6 +14,7 @@ import Firewall from './pages/Firewall'
 import VMs from './pages/VMs'
 import Console from './pages/Console'
 import LXDConsole from './pages/LXDConsole'
+import LXDInstance from './pages/LXDInstance'
 import VMConsole from './pages/VMConsole'
 import HostTerminal from './pages/HostTerminal'
 import LLM from './pages/LLM'
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="/lxd/networks" element={<Networks />} />
         <Route path="/lxd/firewall" element={<Firewall />} />
         <Route path="/lxd/:name/console" element={<LXDConsole />} />
+        <Route path="/lxd/:name" element={<LXDInstance />} />
         <Route path="/vms" element={<VMs />} />
         <Route path="/vms/:uuid/console" element={<Console />} />
         <Route path="/vms/:uuid/terminal" element={<VMConsole />} />

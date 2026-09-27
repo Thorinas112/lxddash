@@ -209,7 +209,14 @@ export default function LXD() {
               const memPct = memTotal > 0 ? (memUsage / memTotal) * 100 : 0
               return (
               <tr key={inst.name} className="bg-white hover:bg-gray-50">
-                <td className="whitespace-nowrap px-4 py-3 font-medium text-gray-900">{inst.name}</td>
+                <td className="whitespace-nowrap px-4 py-3 font-medium text-gray-900">
+                  <button
+                    onClick={() => navigate(`/lxd/${encodeURIComponent(inst.name)}`)}
+                    className="text-blue-600 hover:underline"
+                  >
+                    {inst.name}
+                  </button>
+                </td>
                 <td className="whitespace-nowrap px-4 py-3 text-gray-600">
                   {inst.type === 'virtual-machine' ? 'VM' : 'Container'}
                 </td>
