@@ -721,6 +721,112 @@ func (s *Service) ISOPath(name string) string {
 	return filepath.Join(s.isoDir, filepath.Base(name))
 }
 
+// AttachISO attaches (or replaces) a CDROM ISO on a running VM.
+// It gets the current domain XML, adds/modifies the cdrom device, and
+// re-defines the domain. The VM must be shut down first.
+func (s *Service) AttachISO(ctx context.Context, uuid string, isoName string) error {
+	d, err := s.domainByUUID(uuid)
+	if err != nil {
+		return err
+	}
+
+	// Get current XML.
+	xmlDesc, err := s.l.DomainGetXMLDesc(d, 0)
+	if err != nil {
+		return fmt.Errorf("get domain XML: %w", err)
+	}
+
+	// Parse and modify.
+	var domXML struct {
+		Name    string `xml:"name"`
+		Devices struct {
+			Disks []struct {
+				Type   string `xml:"type,attr"`
+				Device string `xml:"device,attr"`
+				Source struct {
+					File string `xml:"file,attr"`
+				} `xml:"source"`
+				Target struct {
+					Dev  string `xml:"dev,attr"`
+					Bus  string `xml:"bus,attr"`
+				} `xml:"target"`
+			} `xml:"disk"`
+		} `xml:"devices"`
+	}
+	if err := xml.Unmarshal([]byte(xmlDesc), &domXML); err != nil {
+		return fmt.Errorf("parse domain XML: %w", err)
+	}
+
+	// Remove existing cdrom devices.
+	newDisks := make([]struct {
+		Type   string `xml:"type,attr"`
+		Device string `xml:"device,attr"`
+		Source struct {
+			File string `xml:"file,attr"`
+		} `xml:"source"`
+		Target struct {
+			Dev  string `xml:"dev,attr"`
+			Bus  string `xml:"bus,attr"`
+		} `xml:"target"`
+	}, 0)
+	for _, dk := range domXML.Devices.Disks {
+		if dk.Device == "cdrom" {
+			continue
+		}
+		newDisks = append(newDisks, dk)
+	}
+
+	// Add new cdrom if isoName is not empty.
+	if isoName != "" {
+		isoPath := filepath.Join(s.isoDir, filepath.Base(isoName))
+		cdrom := struct {
+			Type   string `xml:"type,attr"`
+			Device string `xml:"device,attr"`
+			Source struct {
+				File string `xml:"file,attr"`
+			} `xml:"source"`
+			Target struct {
+				Dev  string `xml:"dev,attr"`
+				Bus  string `xml:"bus,attr"`
+			} `xml:"target"`
+		}{
+			Type:   "file",
+			Device: "cdrom",
+		}
+		cdrom.Source.File = isoPath
+		cdrom.Target.Dev = "sda"
+		cdrom.Target.Bus = "sata"
+		newDisks = append(newDisks, cdrom)
+	}
+
+	// Rebuild the XML by doing string replacement — find the <devices> block
+	// and replace disk elements. This is fragile but simpler than full XML rebuild.
+	// Use virsh for reliability instead.
+	args := []string{}
+	if isoName != "" {
+		isoPath := filepath.Join(s.isoDir, filepath.Base(isoName))
+		args = []string{"attach-disk", domXML.Name, isoPath, "sda", "--type", "cdrom", "--mode", "readonly"}
+	} else {
+		// Detach: find existing cdrom device name
+		for _, dk := range domXML.Devices.Disks {
+			if dk.Device == "cdrom" {
+				args = []string{"detach-disk", domXML.Name, dk.Target.Dev}
+				break
+			}
+		}
+		if len(args) == 0 {
+			return fmt.Errorf("no cdrom device to detach")
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, "virsh", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("virsh %s failed: %v: %s", args[0], err, out)
+	}
+	return nil
+}
+
 func (s *Service) domainByUUID(uuid string) (libvirt.Domain, error) {
 	u, err := parseUUID(uuid)
 	if err != nil {

@@ -471,3 +471,23 @@ func (h *Handlers) VMConsole(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+// VMAttachISO attaches or detaches a CDROM ISO on a VM.
+func (h *Handlers) VMAttachISO(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Libvirt == nil {
+		writeErr(w, http.StatusServiceUnavailable, "libvirt service unavailable")
+		return
+	}
+	var req struct {
+		ISO string `json:"iso"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.deps.Libvirt.AttachISO(r.Context(), r.PathValue("uuid"), req.ISO); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}

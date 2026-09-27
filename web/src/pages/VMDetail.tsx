@@ -4,7 +4,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { api } from '../api/client'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'
-import { btnAction, btnPrimary } from '../components/ui'
+import { btnAction, btnPrimary, inputCls } from '../components/ui'
 
 type Tab = 'overview' | 'snapshots' | 'console' | 'graphs'
 
@@ -273,6 +273,9 @@ export default function VMDetail() {
               </table>
             </div>
           )}
+
+          {/* Attach ISO */}
+          <AttachISOSection uuid={uuid} isRunning={isRunning} onDone={load} onError={setError} />
         </div>
       )}
 
@@ -422,6 +425,77 @@ export default function VMDetail() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function AttachISOSection({ uuid, isRunning, onDone, onError }: {
+  uuid: string; isRunning: boolean;
+  onDone: () => void; onError: (msg: string) => void;
+}) {
+  const [isos, setIsos] = useState<any[]>([])
+  const [selected, setSelected] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [uploading, setUploading] = useState(false)
+
+  useEffect(() => {
+    api.vms.isos().then(setIsos).catch(() => {})
+  }, [])
+
+  async function attach() {
+    setBusy(true)
+    try {
+      await api.vms.attachISO(uuid, selected)
+      onDone()
+    } catch (e: any) { onError(e.message) }
+    finally { setBusy(false) }
+  }
+
+  async function detach() {
+    setBusy(true)
+    try {
+      await api.vms.attachISO(uuid, '')
+      onDone()
+    } catch (e: any) { onError(e.message) }
+    finally { setBusy(false) }
+  }
+
+  async function upload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    try {
+      await api.vms.uploadISO(file)
+      setIsos(await api.vms.isos())
+    } catch (err: any) { onError(err.message) }
+    finally { setUploading(false); e.target.value = '' }
+  }
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-4">
+      <div className="mb-3 text-xs uppercase tracking-wide text-gray-500">Boot Media</div>
+      <p className="mb-3 text-sm text-gray-600">
+        Attach an ISO to install an operating system. The VM must be shut down.
+      </p>
+      <div className="flex items-center gap-3">
+        <select value={selected} onChange={(e) => setSelected(e.target.value)} className={`${inputCls} flex-1`}
+          disabled={isRunning}>
+          <option value="">No ISO selected</option>
+          {isos.map((iso) => (
+            <option key={iso.name} value={iso.name}>{iso.name} ({fmtBytes(iso.size)})</option>
+          ))}
+        </select>
+        <button onClick={attach} disabled={isRunning || busy || !selected} className={btnPrimary}>
+          {busy ? <Spinner /> : 'Attach'}
+        </button>
+        <button onClick={detach} disabled={isRunning || busy} className={btnAction('bg-red-100 text-red-700')}>
+          Detach
+        </button>
+        <label className="cursor-pointer rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+          {uploading ? 'Uploading...' : 'Upload ISO'}
+          <input type="file" accept=".iso" onChange={upload} className="hidden" />
+        </label>
+      </div>
     </div>
   )
 }

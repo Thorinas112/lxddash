@@ -290,6 +290,8 @@ export const api = {
       request<any>(`/vms/${uuid}/autostart`, { method: 'POST', body: JSON.stringify({ enabled }) }),
     resize: (uuid: string, body: any) =>
       request<any>(`/vms/${uuid}/resize`, { method: 'POST', body: JSON.stringify(body) }),
+    attachISO: (uuid: string, iso: string) =>
+      request<any>(`/vms/${uuid}/attach-iso`, { method: 'POST', body: JSON.stringify({ iso }) }),
   },
 
   proxmox: {
