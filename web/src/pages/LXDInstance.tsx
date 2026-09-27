@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import Badge from '../components/Badge'
 import LiveGraphsModal from '../components/LiveGraphsModal'
+import Modal from '../components/Modal'
 import Spinner from '../components/Spinner'
 import { btnAction, btnGhost, btnPrimary, inputCls } from '../components/ui'
 
@@ -49,6 +50,7 @@ export default function LXDInstance() {
   const [backups, setBackups] = useState<any[]>([])
   const [editOpen, setEditOpen] = useState(false)
   const [graphsOpen, setGraphsOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
   const [updates, setUpdates] = useState<any>(null)
   const [editingConfig, setEditingConfig] = useState<Record<string, string>>({})
   const [saveBusy, setSaveBusy] = useState(false)
@@ -187,11 +189,41 @@ export default function LXDInstance() {
               </button>
             </>
           )}
+          <button onClick={() => setTab('snapshots')} className={btnAction('bg-purple-100 text-purple-700')}>
+            Snapshots
+          </button>
+          <button onClick={() => setTab('backups')} className={btnAction('bg-amber-100 text-amber-700')}>
+            Backups
+          </button>
+          <button onClick={() => setFilesOpen(true)} className={btnAction('bg-orange-100 text-orange-700')}>
+            Files
+          </button>
           <button onClick={() => setGraphsOpen(true)} className={btnAction('bg-indigo-100 text-indigo-700')}>
-            Live graphs
+            Graphs
+          </button>
+          <button
+            onClick={() => {
+              const token = localStorage.getItem('lxddash_token') || ''
+              const url = `/lxd/${encodeURIComponent(name)}/console-popup?token=${token}`
+              window.open(url, `_blank_${name}_console`, 'width=900,height=600,menubar=no,toolbar=no,location=no,status=no')
+            }}
+            className={btnAction('bg-cyan-100 text-cyan-700')}
+          >
+            Console
           </button>
           <button onClick={() => setEditOpen(true)} className={btnAction('bg-teal-100 text-teal-700')}>
             Edit
+          </button>
+          <button
+            onClick={async () => {
+              if (!confirm(`Delete instance ${name}? This cannot be undone.`)) return
+              setBusy('remove')
+              try { await api.lxd.action(name, 'remove'); navigate('/lxd') }
+              catch (e: any) { setError(e.message); setBusy('') }
+            }}
+            className={btnAction('bg-red-100 text-red-700')}
+          >
+            Delete
           </button>
         </div>
       </div>
@@ -674,6 +706,9 @@ export default function LXDInstance() {
       )}
 
       {/* Modals */}
+      {filesOpen && (
+        <FilesModal name={name} onClose={() => setFilesOpen(false)} />
+      )}
       {graphsOpen && (
         <LiveGraphsModal
           title={`Live graphs - ${name}`}
@@ -789,5 +824,70 @@ function EditInstanceModal({ name, onClose, onSaved }: { name: string; onClose: 
         </div>
       </div>
     </div>
+  )
+}
+
+function FilesModal({ name, onClose }: { name: string; onClose: () => void }) {
+  const [path, setPath] = useState('/')
+  const [entries, setEntries] = useState<any[]>([])
+  const [error, setError] = useState('')
+  const [viewing, setViewing] = useState<string | null>(null)
+  const [fileContent, setFileContent] = useState('')
+
+  const load = useCallback(async () => {
+    try { setEntries(await api.lxd.files(name, path)) }
+    catch (e: any) { setError(e.message) }
+  }, [name, path])
+  useEffect(() => { load() }, [load])
+
+  function join(p: string, child: string) { return p === '/' ? `/${child}` : `${p}/${child}` }
+
+  async function open(entry: any) {
+    if (entry.type === 'directory') { setPath(join(path, entry.name)); return }
+    try {
+      const res = await fetch(`/api/lxd/instances/${encodeURIComponent(name)}/files?path=${encodeURIComponent(join(path, entry.name))}`,
+        { headers: { Authorization: `Bearer ${localStorage.getItem('lxddash_token') || ''}` } })
+      setFileContent(await res.text()); setViewing(entry.name)
+    } catch (e: any) { setError(e.message) }
+  }
+
+  async function del(entry: any) {
+    if (!confirm(`Delete ${entry.name}?`)) return
+    try { await api.lxd.deleteFile(name, join(path, entry.name)); await load() }
+    catch (e: any) { setError(e.message) }
+  }
+
+  return (
+    <Modal title={`Files - ${name}`} onClose={onClose}>
+      <div className="mb-3 flex items-center gap-2">
+        <button onClick={() => setPath(path === '/' ? '/' : path.split('/').slice(0, -1).join('/') || '/')} disabled={path === '/'}
+          className="rounded bg-gray-200 px-2 py-1 text-xs text-gray-700 disabled:opacity-40">Back</button>
+        <span className="flex-1 truncate rounded bg-gray-100 px-2 py-1 font-mono text-xs text-gray-700">{path}</span>
+      </div>
+      {error && <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>}
+      <div className="divide-y divide-gray-100 rounded border border-gray-200">
+        {entries.map((entry) => (
+          <div key={entry.name} className="flex items-center justify-between bg-white px-3 py-2 text-sm">
+            <button onClick={() => open(entry)} className="flex items-center gap-2 text-left text-gray-900">
+              <span className="text-gray-400">{entry.type === 'directory' ? 'Folder' : 'File'}</span> {entry.name}
+            </button>
+            <div className="flex gap-1">
+              {entry.type === 'file' && <button onClick={() => open(entry)} className={btnAction('bg-blue-100 text-blue-700')}>View</button>}
+              <button onClick={() => del(entry)} className={btnAction('bg-red-100 text-red-700')}>Delete</button>
+            </div>
+          </div>
+        ))}
+        {entries.length === 0 && <div className="bg-white px-3 py-4 text-center text-sm text-gray-500">Empty directory</div>}
+      </div>
+      {viewing && (
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between">
+            <p className="font-mono text-xs text-gray-500">{viewing}</p>
+            <button onClick={() => setViewing(null)} className="rounded bg-gray-200 px-2 py-1 text-xs">Close</button>
+          </div>
+          <pre className="max-h-64 overflow-auto rounded border border-gray-200 bg-gray-900 p-3 font-mono text-xs text-gray-300">{fileContent}</pre>
+        </div>
+      )}
+    </Modal>
   )
 }

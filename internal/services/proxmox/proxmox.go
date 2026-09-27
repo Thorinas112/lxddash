@@ -37,6 +37,7 @@ type Task struct {
 	Type      string    `json:"type"` // "qemu" or "lxc"
 	Source    string    `json:"source"`
 	Status    string    `json:"status"` // running | done | failed
+	Progress  int       `json:"progress"` // 0-100
 	Message   string    `json:"message"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -194,6 +195,11 @@ func (s *Service) Tasks() []*Task {
 }
 
 func (s *Service) update(task *Task, msg string) {
+	s.updateProgress(task, task.Progress, msg)
+}
+
+func (s *Service) updateProgress(task *Task, pct int, msg string) {
+	task.Progress = pct
 	task.Message = msg
 	task.UpdatedAt = time.Now()
 }
@@ -213,7 +219,7 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 	}
 	defer os.RemoveAll(dir)
 
-	s.update(task, "extracting backup archive")
+	s.updateProgress(task, 10, "extracting backup archive")
 	if err := extractArchive(path, dir); err != nil {
 		return err
 	}
@@ -242,7 +248,7 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 		name = fmt.Sprintf("pve-ct-%d", task.VMID)
 	}
 
-	s.update(task, fmt.Sprintf("creating LXD container %q", name))
+	s.updateProgress(task, 30, fmt.Sprintf("creating LXD container %q", name))
 	instReq := lxd.CreateRequest{
 		Name: name,
 		Type: "container",
@@ -265,18 +271,19 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 
 	// Start the container so its rootfs is mounted and writable,
 	// then push the extracted rootfs files into it.
-	s.update(task, "starting container to mount rootfs")
+	s.updateProgress(task, 50, "starting container to mount rootfs")
 	if err := s.lxd.SetState(ctx, name, "start"); err != nil {
 		return fmt.Errorf("start instance: %w", err)
 	}
 
-	s.update(task, "copying rootfs into container (this can take a while)")
+	s.updateProgress(task, 60, "copying rootfs into container (this can take a while)")
+
 	cmd := exec.CommandContext(ctx, "lxc", "file", "push", "-r", rootfsDir+"/.", name+"/")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("rootfs copy failed: %v: %s", err, out)
 	}
 
-	s.update(task, "container imported successfully")
+	s.updateProgress(task, 100, "container imported successfully")
 	return nil
 }
 

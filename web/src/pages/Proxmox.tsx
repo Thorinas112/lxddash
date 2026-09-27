@@ -233,6 +233,7 @@ export default function Proxmox() {
             <tr>
               <th className="px-4 py-3">Source</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Progress</th>
               <th className="px-4 py-3">Message</th>
               <th className="px-4 py-3">Updated</th>
             </tr>
@@ -244,6 +245,21 @@ export default function Proxmox() {
                 <td className="px-4 py-3">
                   <Badge status={t.status} />
                 </td>
+                <td className="px-4 py-3">
+                  {t.status === 'running' && (
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 w-32 overflow-hidden rounded bg-gray-200">
+                        <div
+                          className="h-full rounded bg-blue-500 transition-all duration-500"
+                          style={{ width: `${t.progress || 0}%` }}
+                        />
+                      </div>
+                      <span className="text-xs tabular-nums text-gray-500">{t.progress || 0}%</span>
+                    </div>
+                  )}
+                  {t.status === 'done' && <span className="text-xs text-green-600">100%</span>}
+                  {t.status === 'failed' && <span className="text-xs text-red-500">-</span>}
+                </td>
                 <td className="px-4 py-3 text-gray-600">{t.message}</td>
                 <td className="px-4 py-3 text-gray-600">
                   {new Date(t.updated_at).toLocaleTimeString()}
@@ -252,7 +268,7 @@ export default function Proxmox() {
             ))}
             {tasks.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
                   No import tasks yet
                 </td>
               </tr>
