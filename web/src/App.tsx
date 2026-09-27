@@ -51,33 +51,39 @@ export default function App() {
   if (!token) return <Login />
 
   return (
-    <Layout>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/docker" element={<Docker />} />
-        <Route path="/lxd" element={<LXD />} />
-        <Route path="/lxd/images" element={<Images />} />
-        <Route path="/lxd/profiles" element={<Profiles />} />
-        <Route path="/lxd/storage" element={<Storage />} />
-        <Route path="/lxd/networks" element={<Networks />} />
-        <Route path="/lxd/firewall" element={<Firewall />} />
-        <Route path="/lxd/:name/console" element={<LXDConsole isPopup={false} />} />
-        <Route path="/lxd/:name/console-popup" element={<LXDConsole isPopup={true} />} />
-        <Route path="/lxd/:name" element={<LXDInstance />} />
-        <Route path="/vms" element={<VMs />} />
-        <Route path="/vms/:uuid/console" element={<Console />} />
-        <Route path="/vms/:uuid/terminal" element={<VMConsole />} />
-        <Route path="/proxmox" element={<Proxmox />} />
-        <Route path="/activity" element={<Activity />} />
-        <Route path="/backups" element={<Backups />} />
-        <Route path="/metrics" element={<Metrics />} />
-        <Route path="/resources" element={<Resources />} />
-        <Route path="/systemd" element={<Systemd />} />
-        <Route path="/terminal" element={<HostTerminal />} />
-        <Route path="/llm" element={<LLM />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Layout>
+    <Routes>
+      {/* Popup routes — no Layout/sidebar */}
+      <Route path="/lxd/:name/console-popup" element={<LXDConsole isPopup={true} />} />
+      <Route path="/vms/:uuid/console" element={<Console />} />
+      <Route path="/vms/:uuid/terminal" element={<VMConsole />} />
+      {/* Main app — with Layout/sidebar */}
+      <Route path="*" element={
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/docker" element={<Docker />} />
+            <Route path="/lxd" element={<LXD />} />
+            <Route path="/lxd/images" element={<Images />} />
+            <Route path="/lxd/profiles" element={<Profiles />} />
+            <Route path="/lxd/storage" element={<Storage />} />
+            <Route path="/lxd/networks" element={<Networks />} />
+            <Route path="/lxd/firewall" element={<Firewall />} />
+            <Route path="/lxd/:name/console" element={<LXDConsole isPopup={false} />} />
+            <Route path="/lxd/:name" element={<LXDInstance />} />
+            <Route path="/vms" element={<VMs />} />
+            <Route path="/proxmox" element={<Proxmox />} />
+            <Route path="/activity" element={<Activity />} />
+            <Route path="/backups" element={<Backups />} />
+            <Route path="/metrics" element={<Metrics />} />
+            <Route path="/resources" element={<Resources />} />
+            <Route path="/systemd" element={<Systemd />} />
+            <Route path="/terminal" element={<HostTerminal />} />
+            <Route path="/llm" element={<LLM />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Layout>
+      } />
+    </Routes>
   )
 }
