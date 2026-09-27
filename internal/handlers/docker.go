@@ -298,6 +298,23 @@ func (h *Handlers) dockerCompose(w http.ResponseWriter, r *http.Request, action 
 	writeJSON(w, http.StatusOK, map[string]string{"output": out})
 }
 
+// DockerPruneImages removes unused Docker images.
+func (h *Handlers) DockerPruneImages(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	report, err := h.deps.Docker.PruneImages(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"images_deleted":  len(report.Report.ImagesDeleted),
+		"space_reclaimed": report.Report.SpaceReclaimed,
+	})
+}
+
 // DockerExec opens a WebSocket that bridges to an interactive shell inside a Docker container.
 func (h *Handlers) DockerExec(w http.ResponseWriter, r *http.Request) {
 	if h.deps.Docker == nil {

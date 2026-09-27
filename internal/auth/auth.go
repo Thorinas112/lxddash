@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,6 +194,19 @@ func (s *Service) Setup(user, password string) error {
 	}
 	s.setupRequired = false
 	return nil
+}
+
+// ChangePassword verifies the old password and sets a new one.
+func (s *Service) ChangePassword(oldPassword, newPassword string) error {
+	if err := bcrypt.CompareHashAndPassword(s.hash, []byte(oldPassword)); err != nil {
+		return fmt.Errorf("incorrect current password")
+	}
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	s.hash = newHash
+	return s.persist()
 }
 
 // Login verifies credentials and returns a signed JWT valid for 24h.

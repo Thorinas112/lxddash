@@ -92,3 +92,24 @@ func (h *Handlers) AuthDeleteToken(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
+
+// ChangePassword handles password change requests.
+func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		OldPassword string `json:"old_password"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.NewPassword == "" {
+		writeErr(w, http.StatusBadRequest, "new password is required")
+		return
+	}
+	if err := h.deps.Auth.ChangePassword(req.OldPassword, req.NewPassword); err != nil {
+		writeErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "password changed"})
+}

@@ -197,6 +197,13 @@ export default function Proxmox() {
                     <Spinner />
                   ) : (
                     <div className="flex justify-end gap-1">
+                      <a
+                        href={api.proxmox.downloadBackup(b.filename)}
+                        target="_blank"
+                        className={btnAction('bg-green-100 text-green-700')}
+                      >
+                        Download
+                      </a>
                       <button
                         onClick={() => doImport(b)}
                         className={btnAction('bg-blue-100 text-blue-700')}

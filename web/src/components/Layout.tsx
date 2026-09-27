@@ -51,6 +51,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [results, setResults] = useState<any[]>([])
   const [searchOpen, setSearchOpen] = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)
+  const [dark, setDark] = useState(() => localStorage.getItem('lxddash-theme') === 'dark')
 
   // Global search with debounce.
   useEffect(() => {
@@ -78,6 +79,12 @@ export default function Layout({ children }: { children: ReactNode }) {
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
   }, [])
+
+  // Apply dark mode class to body on mount and when toggled.
+  useEffect(() => {
+    document.body.classList.toggle('dark', dark)
+    localStorage.setItem('lxddash-theme', dark ? 'dark' : 'light')
+  }, [dark])
 
   // Ctrl+K focuses the search box.
   useEffect(() => {
@@ -239,6 +246,16 @@ export default function Layout({ children }: { children: ReactNode }) {
         </button>
       </aside>
       <main className="flex flex-1 flex-col overflow-auto">
+        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-2">
+          <div />
+          <button
+            onClick={() => setDark((d) => !d)}
+            className="flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
+            title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {dark ? '☀️ Light' : '🌙 Dark'}
+          </button>
+        </div>
         <div className="flex-1 overflow-auto p-6">{children}</div>
       </main>
     </div>

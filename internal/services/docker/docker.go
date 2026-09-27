@@ -363,3 +363,8 @@ func (s *Service) runCompose(ctx context.Context, dir string, args ...string) (s
 	}
 	return string(out), nil
 }
+
+// PruneImages removes unused (dangling) images.
+func (s *Service) PruneImages(ctx context.Context) (client.ImagePruneResult, error) {
+	return s.cli.ImagePrune(ctx, client.ImagePruneOptions{})
+}

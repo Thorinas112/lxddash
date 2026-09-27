@@ -294,6 +294,32 @@ export default function Docker() {
       )}
 
       {tab === 'images' && (
+        <>
+        <div className="mb-3 flex justify-end">
+          <button
+            onClick={async () => {
+              if (!window.confirm('Remove all unused images? This cannot be undone.')) return
+              try {
+                const res = await api.docker.pruneImages()
+                const count = res.images_deleted ?? 0
+                const space = res.space_reclaimed ?? 0
+                const units = ['B', 'KB', 'MB', 'GB', 'TB']
+                let sizeStr = '0 B'
+                if (space > 0) {
+                  const i = Math.min(units.length - 1, Math.floor(Math.log(space) / Math.log(1024)))
+                  sizeStr = `${(space / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
+                }
+                window.alert(`Pruned ${count} image(s), reclaimed ${sizeStr}.`)
+                await load()
+              } catch (e: any) {
+                setError(e.message)
+              }
+            }}
+            className="rounded bg-amber-100 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-200"
+          >
+            Prune unused images
+          </button>
+        </div>
         <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
           <table className="w-full text-sm">
             <thead className="bg-panel2 text-left text-xs uppercase tracking-wide text-gray-500">
@@ -346,6 +372,7 @@ export default function Docker() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {tab === 'volumes' && (

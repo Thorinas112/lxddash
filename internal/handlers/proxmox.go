@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 )
 
 func (h *Handlers) ProxmoxBackups(w http.ResponseWriter, r *http.Request) {
@@ -92,4 +95,20 @@ func (h *Handlers) ProxmoxTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.deps.Proxmox.Tasks())
+}
+
+// ProxmoxDownloadBackup streams a backup file for download.
+func (h *Handlers) ProxmoxDownloadBackup(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Proxmox == nil {
+		writeErr(w, http.StatusServiceUnavailable, "proxmox service unavailable")
+		return
+	}
+	filename := r.PathValue("file")
+	path := filepath.Join(h.deps.Config.ProxmoxDumpDir, filepath.Base(filename))
+	if _, err := os.Stat(path); err != nil {
+		writeErr(w, http.StatusNotFound, "backup file not found")
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filepath.Base(path)))
+	http.ServeFile(w, r, path)
 }

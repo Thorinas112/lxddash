@@ -51,6 +51,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       }),
+    changePassword: (oldPassword: string, newPassword: string) =>
+      request<any>('/auth/password', { method: 'POST', body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }) }),
   },
 
   login: (username: string, password: string) =>
@@ -141,6 +143,7 @@ export const api = {
     pullImage: (ref: string) =>
       request<any>('/docker/images/pull', { method: 'POST', body: JSON.stringify({ ref }) }),
     removeImage: (id: string) => request<any>(`/docker/images/${id}`, { method: 'DELETE' }),
+    pruneImages: () => request<any>('/docker/images/prune', { method: 'POST' }),
     networks: () => request<any[]>('/docker/networks'),
     volumes: () => request<any[]>('/docker/volumes'),
     removeVolume: (name: string) => request<any>(`/docker/volumes/${name}`, { method: 'DELETE' }),
@@ -314,6 +317,7 @@ export const api = {
     import: (path: string) =>
       request<any>('/proxmox/import', { method: 'POST', body: JSON.stringify({ path }) }),
     tasks: () => request<any[]>('/proxmox/tasks'),
+    downloadBackup: (file: string) => `${API}/proxmox/download/${encodeURIComponent(file)}`,
   },
 
   ollama: {

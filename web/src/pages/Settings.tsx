@@ -25,6 +25,12 @@ export default function Settings() {
     interval: 60,
   })
   const [alertsMsg, setAlertsMsg] = useState('')
+  const [oldPw, setOldPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [pwMsg, setPwMsg] = useState('')
+  const [pwError, setPwError] = useState('')
+  const [pwBusy, setPwBusy] = useState(false)
 
   const loadTokens = useCallback(async () => {
     try {
@@ -166,6 +172,69 @@ export default function Settings() {
   return (
     <div>
       <h1 className="mb-6 text-xl font-bold text-gray-900">Settings</h1>
+
+      <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">
+          Change Password
+        </h2>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <input
+            type="password"
+            value={oldPw}
+            onChange={(e) => setOldPw(e.target.value)}
+            placeholder="Current password"
+            className="rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none"
+          />
+          <input
+            type="password"
+            value={newPw}
+            onChange={(e) => setNewPw(e.target.value)}
+            placeholder="New password"
+            className="rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none"
+          />
+          <input
+            type="password"
+            value={confirmPw}
+            onChange={(e) => setConfirmPw(e.target.value)}
+            placeholder="Confirm new password"
+            className="rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            onClick={async () => {
+              setPwMsg('')
+              setPwError('')
+              if (!oldPw || !newPw) {
+                setPwError('Please fill in all fields.')
+                return
+              }
+              if (newPw !== confirmPw) {
+                setPwError('New passwords do not match.')
+                return
+              }
+              setPwBusy(true)
+              try {
+                await api.auth.changePassword(oldPw, newPw)
+                setPwMsg('Password changed successfully.')
+                setOldPw('')
+                setNewPw('')
+                setConfirmPw('')
+              } catch (e: any) {
+                setPwError(e.message)
+              } finally {
+                setPwBusy(false)
+              }
+            }}
+            disabled={pwBusy}
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
+          >
+            {pwBusy ? 'Changing…' : 'Change password'}
+          </button>
+          {pwMsg && <span className="text-xs text-emerald-600">{pwMsg}</span>}
+          {pwError && <span className="text-xs text-red-500">{pwError}</span>}
+        </div>
+      </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
