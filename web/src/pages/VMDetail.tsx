@@ -20,6 +20,14 @@ function fmtMem(mb: number): string {
   return `${mb} MB`
 }
 
+// vm.memory is in bytes from the API, convert to display
+function fmtMemBytes(bytes: number): string {
+  if (!bytes) return '--'
+  const mb = bytes / (1024 * 1024)
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
+  return `${Math.round(mb)} MB`
+}
+
 function fmtUptime(s: number): string {
   if (!s || s <= 0) return '--'
   const d = Math.floor(s / 86400)
@@ -218,7 +226,7 @@ export default function VMDetail() {
             </div>
             <div className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-xs uppercase tracking-wide text-gray-500">Memory</div>
-              <div className="mt-1 text-lg font-semibold text-gray-900">{vm?.memory ? fmtMem(vm.memory) : '--'}</div>
+              <div className="mt-1 text-lg font-semibold text-gray-900">{vm?.memory ? fmtMemBytes(vm.memory) : '--'}</div>
               {isRunning && st.mem_usage > 0 && (
                 <div className="mt-1 flex items-center gap-2">
                   <div className="h-1.5 w-24 overflow-hidden rounded bg-gray-200">
@@ -233,6 +241,9 @@ export default function VMDetail() {
               <div className="mt-1 text-lg font-semibold text-gray-900">{vm?.autostart ? 'On' : 'Off'}</div>
             </div>
           </div>
+
+          {/* Attach ISO — placed prominently at the top */}
+          <AttachISOSection uuid={uuid} isRunning={isRunning} onDone={load} onError={setError} />
 
           {/* Disk */}
           {vm?.disk_size && (
@@ -276,9 +287,6 @@ export default function VMDetail() {
               </table>
             </div>
           )}
-
-          {/* Attach ISO */}
-          <AttachISOSection uuid={uuid} isRunning={isRunning} onDone={load} onError={setError} />
         </div>
       )}
 
