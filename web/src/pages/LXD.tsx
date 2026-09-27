@@ -349,7 +349,11 @@ export default function LXD() {
                         Graphs
                       </button>
                       <button
-                        onClick={() => navigate(`/lxd/${encodeURIComponent(inst.name)}/console`)}
+                        onClick={() => {
+                          const token = localStorage.getItem('lxddash_token') || ''
+                          const url = `/lxd/${encodeURIComponent(inst.name)}/console-popup?token=${token}`
+                          window.open(url, `_blank_${inst.name}_console`, 'width=900,height=600,menubar=no,toolbar=no,location=no,status=no')
+                        }}
                         className={btnAction('bg-cyan-100 text-cyan-700')}
                       >
                         Console

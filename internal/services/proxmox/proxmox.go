@@ -28,7 +28,7 @@ type Backup struct {
 	ModTime  time.Time `json:"mod_time"`
 }
 
-var backupRe = regexp.MustCompile(`^vzdump-(qemu|lxc)-(\d+)-(\d{10,14})\.(tar|vma)\.(gz|zst|lzo|xz)$`)
+var backupRe = regexp.MustCompile(`^vzdump-(qemu|lxc)-(\d+)-([\d_\-]{10,25})\.(tar|vma)\.(gz|zst|lzo|xz)$`)
 
 // Task tracks an in-flight import operation.
 type Task struct {
@@ -107,7 +107,7 @@ func (s *Service) Backups() ([]Backup, error) {
 func (s *Service) Upload(filename string, r io.Reader) (string, error) {
 	base := filepath.Base(filename)
 	if !backupRe.MatchString(base) {
-		return "", fmt.Errorf("invalid vzdump filename %q (expected e.g. vzdump-lxc-100-1700000000.tar.zst)", base)
+		return "", fmt.Errorf("invalid vzdump filename %q (expected e.g. vzdump-lxc-100-2026_09_27-10_57_48.tar.zst)", base)
 	}
 	if err := os.MkdirAll(s.dumpDir, 0o755); err != nil {
 		return "", err

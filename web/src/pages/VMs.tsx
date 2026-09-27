@@ -256,20 +256,20 @@ export default function VMs() {
                         </>
                       )}
                       {v.vnc_port > 0 && v.state === 'running' && (
-                        <Link
-                          to={`/vms/${v.uuid}/console`}
+                        <button
+                          onClick={() => window.open(`/vms/${v.uuid}/console`, `_blank_vnc_${v.uuid}`, 'width=1024,height=768,menubar=no,toolbar=no')}
                           className={btnAction('bg-purple-100 text-purple-700')}
                         >
                           VNC
-                        </Link>
+                        </button>
                       )}
                       {v.state === 'running' && (
-                        <Link
-                          to={`/vms/${v.uuid}/terminal`}
+                        <button
+                          onClick={() => window.open(`/vms/${v.uuid}/terminal`, `_blank_term_${v.uuid}`, 'width=900,height=600,menubar=no,toolbar=no')}
                           className={btnAction('bg-cyan-100 text-cyan-700')}
                         >
                           Terminal
-                        </Link>
+                        </button>
                       )}
                       <button
                         onClick={() => setCloneFor(v)}

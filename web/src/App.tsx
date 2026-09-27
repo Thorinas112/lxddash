@@ -61,7 +61,8 @@ export default function App() {
         <Route path="/lxd/storage" element={<Storage />} />
         <Route path="/lxd/networks" element={<Networks />} />
         <Route path="/lxd/firewall" element={<Firewall />} />
-        <Route path="/lxd/:name/console" element={<LXDConsole />} />
+        <Route path="/lxd/:name/console" element={<LXDConsole isPopup={false} />} />
+        <Route path="/lxd/:name/console-popup" element={<LXDConsole isPopup={true} />} />
         <Route path="/lxd/:name" element={<LXDInstance />} />
         <Route path="/vms" element={<VMs />} />
         <Route path="/vms/:uuid/console" element={<Console />} />

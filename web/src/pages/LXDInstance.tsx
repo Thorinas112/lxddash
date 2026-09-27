@@ -658,13 +658,17 @@ export default function LXDInstance() {
       {tab === 'console' && (
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <p className="mb-4 text-sm text-gray-600">
-            Open an interactive shell inside this instance.
+            Open an interactive shell in a separate window so you can keep using the dashboard.
           </p>
           <button
-            onClick={() => navigate(`/lxd/${encodeURIComponent(name)}/console`)}
+            onClick={() => {
+              const token = localStorage.getItem('lxddash_token') || ''
+              const url = `/lxd/${encodeURIComponent(name)}/console-popup?token=${token}`
+              window.open(url, `_blank_${name}_console`, 'width=900,height=600,menubar=no,toolbar=no,location=no,status=no')
+            }}
             className={btnPrimary}
           >
-            Open console
+            Open console in new window
           </button>
         </div>
       )}
