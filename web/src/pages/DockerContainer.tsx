@@ -100,7 +100,7 @@ export default function DockerContainer() {
     }
   }
 
-  const isRunning = container?.State === 'running'
+  const isRunning = container?.State?.Status === 'running'
   const cfg = container?.Config || {}
   const networks = container?.NetworkSettings?.Networks || {}
   const ports = container?.Ports || []
@@ -132,7 +132,7 @@ export default function DockerContainer() {
           </button>
           <span className="text-gray-400">/</span>
           <h1 className="text-xl font-bold text-gray-900">{containerName}</h1>
-          {container && <Badge status={container.State} />}
+          {container && <Badge status={container.State?.Status} />}
           {container?.Config?.Image && (
             <span className="text-xs text-gray-500">{container.Config.Image}</span>
           )}
@@ -183,7 +183,7 @@ export default function DockerContainer() {
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <div className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-xs uppercase tracking-wide text-gray-500">Status</div>
-              <div className="mt-1 text-lg font-semibold text-gray-900">{container?.State || '--'}</div>
+              <div className="mt-1 text-lg font-semibold text-gray-900">{container?.State?.Status || '--'}</div>
             </div>
             <div className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-xs uppercase tracking-wide text-gray-500">Image</div>
@@ -195,7 +195,7 @@ export default function DockerContainer() {
             </div>
             <div className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-xs uppercase tracking-wide text-gray-500">Status Detail</div>
-              <div className="mt-1 text-sm font-semibold text-gray-900">{container?.Status || '--'}</div>
+              <div className="mt-1 text-sm font-semibold text-gray-900">{container?.State?.Status || '--'}</div>
             </div>
           </div>
 
