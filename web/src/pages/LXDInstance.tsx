@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api/client'
 import Badge from '../components/Badge'
-import LiveGraphsModal from '../components/LiveGraphsModal'
-import Modal from '../components/Modal'
 import Spinner from '../components/Spinner'
 import { btnAction, btnGhost, btnPrimary, inputCls } from '../components/ui'
 
@@ -31,7 +30,7 @@ function fmtCPUTime(ns: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-type Tab = 'overview' | 'configuration' | 'devices' | 'snapshots' | 'backups' | 'console'
+type Tab = 'overview' | 'configuration' | 'devices' | 'snapshots' | 'backups' | 'files' | 'graphs'
 type ConfigTab = 'boot' | 'cloud-init' | 'limits' | 'security' | 'migration' | 'raw'
 type DeviceTab = 'disk' | 'gpu' | 'network' | 'proxy' | 'unix'
 
@@ -49,8 +48,6 @@ export default function LXDInstance() {
   const [snapshots, setSnapshots] = useState<any[]>([])
   const [backups, setBackups] = useState<any[]>([])
   const [editOpen, setEditOpen] = useState(false)
-  const [graphsOpen, setGraphsOpen] = useState(false)
-  const [filesOpen, setFilesOpen] = useState(false)
   const [updates, setUpdates] = useState<any>(null)
   const [editingConfig, setEditingConfig] = useState<Record<string, string>>({})
   const [saveBusy, setSaveBusy] = useState(false)
@@ -82,8 +79,20 @@ export default function LXDInstance() {
   }, [name])
 
   useEffect(() => { load() }, [load])
+  const [filesEntries, setFilesEntries] = useState<any[]>([])
+  const [filesPath, setFilesPath] = useState('/')
+  const [filesViewing, setFilesViewing] = useState<string | null>(null)
+  const [filesContent, setFilesContent] = useState('')
+  const [filesError, setFilesError] = useState('')
+
+  const loadFiles = useCallback(async () => {
+    try { setFilesEntries(await api.lxd.files(name, filesPath)) }
+    catch (e: any) { setFilesError(e.message) }
+  }, [name, filesPath])
+
   useEffect(() => { if (tab === 'snapshots') loadSnapshots() }, [tab, loadSnapshots])
   useEffect(() => { if (tab === 'backups') loadBackups() }, [tab, loadBackups])
+  useEffect(() => { if (tab === 'files') loadFiles() }, [tab, loadFiles])
   useEffect(() => { loadUpdates() }, [loadUpdates])
 
   async function act(action: 'start' | 'stop' | 'restart') {
@@ -136,7 +145,8 @@ export default function LXDInstance() {
     { key: 'devices', label: 'Devices' },
     { key: 'snapshots', label: 'Snapshots' },
     { key: 'backups', label: 'Backups' },
-    { key: 'console', label: 'Console' },
+    { key: 'files', label: 'Files' },
+    { key: 'graphs', label: 'Graphs' },
   ]
 
   const CONFIG_TABS: { key: ConfigTab; label: string }[] = [
@@ -189,28 +199,6 @@ export default function LXDInstance() {
               </button>
             </>
           )}
-          <button onClick={() => setTab('snapshots')} className={btnAction('bg-purple-100 text-purple-700')}>
-            Snapshots
-          </button>
-          <button onClick={() => setTab('backups')} className={btnAction('bg-amber-100 text-amber-700')}>
-            Backups
-          </button>
-          <button onClick={() => setFilesOpen(true)} className={btnAction('bg-orange-100 text-orange-700')}>
-            Files
-          </button>
-          <button onClick={() => setGraphsOpen(true)} className={btnAction('bg-indigo-100 text-indigo-700')}>
-            Graphs
-          </button>
-          <button
-            onClick={() => {
-              const token = localStorage.getItem('lxddash_token') || ''
-              const url = `/lxd/${encodeURIComponent(name)}/console-popup?token=${token}`
-              window.open(url, `_blank_${name}_console`, 'width=900,height=600,menubar=no,toolbar=no,location=no,status=no')
-            }}
-            className={btnAction('bg-cyan-100 text-cyan-700')}
-          >
-            Console
-          </button>
           <button onClick={() => setEditOpen(true)} className={btnAction('bg-teal-100 text-teal-700')}>
             Edit
           </button>
@@ -686,47 +674,62 @@ export default function LXDInstance() {
         </div>
       )}
 
-      {/* === CONSOLE TAB === */}
-      {tab === 'console' && (
+      {/* === FILES TAB === */}
+      {tab === 'files' && (
+        <div className="rounded-lg border border-gray-200 bg-white">
+          <div className="flex items-center gap-2 border-b border-gray-100 px-4 py-3">
+            <button onClick={() => { setFilesPath(filesPath === '/' ? '/' : filesPath.split('/').slice(0, -1).join('/') || '/'); setFilesViewing(null) }} disabled={filesPath === '/'}
+              className="rounded bg-gray-200 px-2 py-1 text-xs text-gray-700 disabled:opacity-40">Back</button>
+            <span className="flex-1 truncate rounded bg-gray-100 px-2 py-1 font-mono text-xs text-gray-700">{filesPath}</span>
+          </div>
+          {filesError && <div className="m-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{filesError}</div>}
+          <div className="divide-y divide-gray-100">
+            {filesEntries.map((entry: any) => (
+              <div key={entry.name} className="flex items-center justify-between px-4 py-2 text-sm">
+                <button onClick={() => {
+                  if (entry.type === 'directory') { setFilesPath(filesPath === '/' ? `/${entry.name}` : `${filesPath}/${entry.name}`); setFilesViewing(null); return }
+                  fetch(`/api/lxd/instances/${encodeURIComponent(name)}/files?path=${encodeURIComponent(filesPath === '/' ? `/${entry.name}` : `${filesPath}/${entry.name}`)}`,
+                    { headers: { Authorization: `Bearer ${localStorage.getItem('lxddash_token') || ''}` } })
+                    .then(r => r.text()).then(t => { setFilesContent(t); setFilesViewing(entry.name) })
+                }} className="flex items-center gap-2 text-left text-gray-900">
+                  <span className="text-gray-400">{entry.type === 'directory' ? 'Folder' : 'File'}</span> {entry.name}
+                </button>
+                <div className="flex gap-1">
+                  {entry.type === 'file' && <button onClick={() => {
+                    fetch(`/api/lxd/instances/${encodeURIComponent(name)}/files?path=${encodeURIComponent(filesPath === '/' ? `/${entry.name}` : `${filesPath}/${entry.name}`)}`,
+                      { headers: { Authorization: `Bearer ${localStorage.getItem('lxddash_token') || ''}` } })
+                      .then(r => r.text()).then(t => { setFilesContent(t); setFilesViewing(entry.name) })
+                  }} className={btnAction('bg-blue-100 text-blue-700')}>View</button>}
+                  <button onClick={async () => {
+                    if (!confirm(`Delete ${entry.name}?`)) return
+                    try { await api.lxd.deleteFile(name, filesPath === '/' ? `/${entry.name}` : `${filesPath}/${entry.name}`); loadFiles() }
+                    catch (e: any) { setFilesError(e.message) }
+                  }} className={btnAction('bg-red-100 text-red-700')}>Delete</button>
+                </div>
+              </div>
+            ))}
+            {filesEntries.length === 0 && <div className="px-4 py-6 text-center text-sm text-gray-400">Empty directory</div>}
+          </div>
+          {filesViewing && (
+            <div className="border-t border-gray-100 p-4">
+              <div className="mb-1 flex items-center justify-between">
+                <p className="font-mono text-xs text-gray-500">{filesViewing}</p>
+                <button onClick={() => setFilesViewing(null)} className="rounded bg-gray-200 px-2 py-1 text-xs">Close</button>
+              </div>
+              <pre className="max-h-80 overflow-auto rounded border border-gray-200 bg-gray-900 p-3 font-mono text-xs text-gray-300">{filesContent}</pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* === GRAPHS TAB === */}
+      {tab === 'graphs' && (
         <div className="rounded-lg border border-gray-200 bg-white p-4">
-          <p className="mb-4 text-sm text-gray-600">
-            Open an interactive shell in a separate window so you can keep using the dashboard.
-          </p>
-          <button
-            onClick={() => {
-              const token = localStorage.getItem('lxddash_token') || ''
-              const url = `/lxd/${encodeURIComponent(name)}/console-popup?token=${token}`
-              window.open(url, `_blank_${name}_console`, 'width=900,height=600,menubar=no,toolbar=no,location=no,status=no')
-            }}
-            className={btnPrimary}
-          >
-            Open console in new window
-          </button>
+          <LiveGraphs name={name} />
         </div>
       )}
 
       {/* Modals */}
-      {filesOpen && (
-        <FilesModal name={name} onClose={() => setFilesOpen(false)} />
-      )}
-      {graphsOpen && (
-        <LiveGraphsModal
-          title={`Live graphs - ${name}`}
-          kind="LXD"
-          historyId={name}
-          onClose={() => setGraphsOpen(false)}
-          sample={async () => {
-            const insts = await api.lxd.instances(true)
-            const found = insts.find((i: any) => i.name === name)
-            if (!found || found.status !== 'Running') return null
-            const mem = found.state?.memory
-            return {
-              cpu: 0, mem: mem?.total ? (mem.usage / mem.total) * 100 : 0,
-              memUsage: mem?.usage || 0, memLimit: mem?.total || 0, status: found.status,
-            }
-          }}
-        />
-      )}
 
       {editOpen && (
         <EditInstanceModal
@@ -827,67 +830,101 @@ function EditInstanceModal({ name, onClose, onSaved }: { name: string; onClose: 
   )
 }
 
-function FilesModal({ name, onClose }: { name: string; onClose: () => void }) {
-  const [path, setPath] = useState('/')
-  const [entries, setEntries] = useState<any[]>([])
-  const [error, setError] = useState('')
-  const [viewing, setViewing] = useState<string | null>(null)
-  const [fileContent, setFileContent] = useState('')
+function LiveGraphs({ name }: { name: string }) {
+  const [points, setPoints] = useState<{ t: number; cpu: number; mem: number; memUsage: number; memLimit: number }[]>([])
+  const prevCpu = useRef<{ usage: number; t: number; cpus: number } | null>(null)
+  const [status, setStatus] = useState('')
 
-  const load = useCallback(async () => {
-    try { setEntries(await api.lxd.files(name, path)) }
-    catch (e: any) { setError(e.message) }
-  }, [name, path])
-  useEffect(() => { load() }, [load])
+  // Seed with 24h history
+  useEffect(() => {
+    api.resourceMetrics(24).then((list: any[]) => {
+      const r = list.find((x: any) => x.id === name)
+      if (!r?.samples?.length) return
+      const step = Math.max(1, Math.ceil(r.samples.length / 480))
+      const pts: any[] = []
+      for (let i = 0; i < r.samples.length; i += step) {
+        const sm = r.samples[i]
+        const ml = sm.mem_limit || 0
+        pts.push({ t: Date.parse(sm.time), cpu: sm.cpu_percent || 0, mem: ml > 0 ? (sm.mem_usage / ml) * 100 : 0, memUsage: sm.mem_usage || 0, memLimit: ml })
+      }
+      setPoints(pts)
+    }).catch(() => {})
+  }, [name])
 
-  function join(p: string, child: string) { return p === '/' ? `/${child}` : `${p}/${child}` }
+  // Live poll
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const now = Date.now()
+      const insts = await api.lxd.instances(true)
+      const inst = insts.find((i: any) => i.name === name)
+      if (!inst || inst.status !== 'Running') { setStatus(inst?.status || 'Stopped'); return }
+      setStatus(inst.status)
+      const mem = inst.state?.memory
+      const memUsage = mem?.usage || 0, memLimit = mem?.total || 0
+      const cpuUsage = inst.state?.cpu?.usage || 0
+      const cpus = parseInt(inst.config?.['limits.cpu'] || '1', 10) || 1
+      let cpuPct = 0
+      if (prevCpu.current && cpuUsage >= prevCpu.current.usage) {
+        const wallDelta = (now - prevCpu.current.t) / 1000
+        if (wallDelta > 0) cpuPct = ((cpuUsage - prevCpu.current.usage) / 1e9 / wallDelta) * 100 / cpus
+      }
+      prevCpu.current = { usage: cpuUsage, t: now, cpus }
+      setPoints((prev) => [...prev, { t: now, cpu: cpuPct, mem: memLimit > 0 ? (memUsage / memLimit) * 100 : 0, memUsage, memLimit }].slice(-600))
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [name])
 
-  async function open(entry: any) {
-    if (entry.type === 'directory') { setPath(join(path, entry.name)); return }
-    try {
-      const res = await fetch(`/api/lxd/instances/${encodeURIComponent(name)}/files?path=${encodeURIComponent(join(path, entry.name))}`,
-        { headers: { Authorization: `Bearer ${localStorage.getItem('lxddash_token') || ''}` } })
-      setFileContent(await res.text()); setViewing(entry.name)
-    } catch (e: any) { setError(e.message) }
+  function fmtBytes(n: number) {
+    if (!n) return '0 B'
+    const u = ['B', 'KB', 'MB', 'GB', 'TB']
+    const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
+    return `${(n / Math.pow(1024, i)).toFixed(1)} ${u[i]}`
   }
 
-  async function del(entry: any) {
-    if (!confirm(`Delete ${entry.name}?`)) return
-    try { await api.lxd.deleteFile(name, join(path, entry.name)); await load() }
-    catch (e: any) { setError(e.message) }
-  }
+  const tooltipStyle = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12, color: '#111827' }
+  const last = points[points.length - 1]
 
   return (
-    <Modal title={`Files - ${name}`} onClose={onClose}>
-      <div className="mb-3 flex items-center gap-2">
-        <button onClick={() => setPath(path === '/' ? '/' : path.split('/').slice(0, -1).join('/') || '/')} disabled={path === '/'}
-          className="rounded bg-gray-200 px-2 py-1 text-xs text-gray-700 disabled:opacity-40">Back</button>
-        <span className="flex-1 truncate rounded bg-gray-100 px-2 py-1 font-mono text-xs text-gray-700">{path}</span>
-      </div>
-      {error && <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>}
-      <div className="divide-y divide-gray-100 rounded border border-gray-200">
-        {entries.map((entry) => (
-          <div key={entry.name} className="flex items-center justify-between bg-white px-3 py-2 text-sm">
-            <button onClick={() => open(entry)} className="flex items-center gap-2 text-left text-gray-900">
-              <span className="text-gray-400">{entry.type === 'directory' ? 'Folder' : 'File'}</span> {entry.name}
-            </button>
-            <div className="flex gap-1">
-              {entry.type === 'file' && <button onClick={() => open(entry)} className={btnAction('bg-blue-100 text-blue-700')}>View</button>}
-              <button onClick={() => del(entry)} className={btnAction('bg-red-100 text-red-700')}>Delete</button>
-            </div>
-          </div>
-        ))}
-        {entries.length === 0 && <div className="bg-white px-3 py-4 text-center text-sm text-gray-500">Empty directory</div>}
-      </div>
-      {viewing && (
-        <div className="mt-3">
-          <div className="mb-1 flex items-center justify-between">
-            <p className="font-mono text-xs text-gray-500">{viewing}</p>
-            <button onClick={() => setViewing(null)} className="rounded bg-gray-200 px-2 py-1 text-xs">Close</button>
-          </div>
-          <pre className="max-h-64 overflow-auto rounded border border-gray-200 bg-gray-900 p-3 font-mono text-xs text-gray-300">{fileContent}</pre>
+    <div>
+      <div className="mb-4 flex items-center gap-6">
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-blue-500" />
+          <span className="text-sm text-gray-600">CPU</span>
+          {last && <span className="text-sm font-medium text-gray-900">{last.cpu.toFixed(1)}%</span>}
         </div>
-      )}
-    </Modal>
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-purple-500" />
+          <span className="text-sm text-gray-600">Memory</span>
+          {last && <span className="text-sm font-medium text-gray-900">{fmtBytes(last.memUsage)} / {fmtBytes(last.memLimit)}</span>}
+        </div>
+        <Badge status={status} />
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div>
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">CPU %</p>
+          <ResponsiveContainer width="100%" height={180}>
+            <AreaChart data={points}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="t" tickFormatter={(t) => new Date(t).toLocaleTimeString()} tick={{ fontSize: 10 }} stroke="#d1d5db" />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} stroke="#d1d5db" />
+              <Tooltip contentStyle={tooltipStyle} labelFormatter={(t) => new Date(Number(t)).toLocaleTimeString()} formatter={(v: any) => [`${Number(v).toFixed(1)}%`, 'CPU']} />
+              <Area type="monotone" dataKey="cpu" stroke="#3b82f6" fill="#3b82f620" strokeWidth={1.5} isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div>
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">Memory %</p>
+          <ResponsiveContainer width="100%" height={180}>
+            <AreaChart data={points}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="t" tickFormatter={(t) => new Date(t).toLocaleTimeString()} tick={{ fontSize: 10 }} stroke="#d1d5db" />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} stroke="#d1d5db" />
+              <Tooltip contentStyle={tooltipStyle} labelFormatter={(t) => new Date(Number(t)).toLocaleTimeString()} formatter={(v: any) => [`${Number(v).toFixed(1)}%`, 'Memory']} />
+              <Area type="monotone" dataKey="mem" stroke="#8b5cf6" fill="#8b5cf620" strokeWidth={1.5} isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
   )
 }
