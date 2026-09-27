@@ -1,5 +1,5 @@
 ﻿import { ReactNode, useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import AssistModal from '../components/AssistModal'
 import Badge from '../components/Badge'
@@ -185,7 +185,9 @@ export default function Docker() {
               return (
               <tr key={c.Id} className="bg-white hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium text-gray-900">
-                  {c.Names[0]?.replace(/^\//, '') || c.Id.slice(0, 12)}
+                  <Link to={`/docker/${c.Id}`} className="text-blue-600 hover:underline">
+                    {c.Names[0]?.replace(/^\//, '') || c.Id.slice(0, 12)}
+                  </Link>
                 </td>
                 <td className="px-4 py-3 text-gray-600">{c.Image}</td>
                 <td className="px-4 py-3">
@@ -266,18 +268,6 @@ export default function Docker() {
                         className={btnAction('bg-blue-100 text-blue-700')}
                       >
                         Restart
-                      </button>
-                      <button
-                        onClick={() => openLogs(c.Id)}
-                        className={btnAction('bg-gray-100 text-gray-600')}
-                      >
-                        Logs
-                      </button>
-                      <button
-                        onClick={() => setGraphsFor(c.Id)}
-                        className={btnAction('bg-indigo-100 text-indigo-700')}
-                      >
-                        Graphs
                       </button>
                       <button
                         onClick={() => act(c.Id, 'remove')}
@@ -564,6 +554,14 @@ function CreateContainerModal({ onClose, onCreated }: { onClose: () => void; onC
     setBusy(true)
     setError('')
     try {
+      // Auto-pull the image if it's not local (Docker Hub reference).
+      if (image.includes(':') || image.includes('/')) {
+        try {
+          await api.docker.pullImage(image)
+        } catch {
+          // Image may already exist or pull failed — let create try anyway.
+        }
+      }
       await api.docker.create({
         name: name || undefined,
         image,

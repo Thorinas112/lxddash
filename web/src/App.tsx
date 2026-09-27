@@ -12,6 +12,8 @@ import Storage from './pages/Storage'
 import Networks from './pages/Networks'
 import Firewall from './pages/Firewall'
 import VMs from './pages/VMs'
+import DockerContainer from './pages/DockerContainer'
+import VMDetail from './pages/VMDetail'
 import Console from './pages/Console'
 import LXDConsole from './pages/LXDConsole'
 import LXDInstance from './pages/LXDInstance'
@@ -70,7 +72,9 @@ export default function App() {
             <Route path="/lxd/firewall" element={<Firewall />} />
             <Route path="/lxd/:name/console" element={<LXDConsole isPopup={false} />} />
             <Route path="/lxd/:name" element={<LXDInstance />} />
+            <Route path="/docker/:id" element={<DockerContainer />} />
             <Route path="/vms" element={<VMs />} />
+            <Route path="/vms/:uuid" element={<VMDetail />} />
             <Route path="/proxmox" element={<Proxmox />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/backups" element={<Backups />} />

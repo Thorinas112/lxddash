@@ -149,7 +149,11 @@ export default function VMs() {
               const st = stats[v.uuid]
               return (
               <tr key={v.uuid} className="bg-white hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium text-gray-900">{v.name}</td>
+                <td className="px-4 py-3 font-medium text-gray-900">
+                  <Link to={`/vms/${v.uuid}`} className="text-blue-600 hover:underline">
+                    {v.name}
+                  </Link>
+                </td>
                 <td className="px-4 py-3">
                   <Badge status={v.state} />
                 </td>
@@ -255,22 +259,6 @@ export default function VMs() {
                           </button>
                         </>
                       )}
-                      {v.vnc_port > 0 && v.state === 'running' && (
-                        <button
-                          onClick={() => window.open(`/vms/${v.uuid}/console`, `_blank_vnc_${v.uuid}`, 'width=1024,height=768,menubar=no,toolbar=no')}
-                          className={btnAction('bg-purple-100 text-purple-700')}
-                        >
-                          VNC
-                        </button>
-                      )}
-                      {v.state === 'running' && (
-                        <button
-                          onClick={() => window.open(`/vms/${v.uuid}/terminal`, `_blank_term_${v.uuid}`, 'width=900,height=600,menubar=no,toolbar=no')}
-                          className={btnAction('bg-cyan-100 text-cyan-700')}
-                        >
-                          Terminal
-                        </button>
-                      )}
                       <button
                         onClick={() => setCloneFor(v)}
                         className={btnAction('bg-indigo-100 text-indigo-700')}
@@ -288,12 +276,6 @@ export default function VMs() {
                         className={btnAction('bg-pink-100 text-pink-700')}
                       >
                         Resize
-                      </button>
-                      <button
-                        onClick={() => setGraphsFor(v.uuid)}
-                        className={btnAction('bg-teal-100 text-teal-700')}
-                      >
-                        Graphs
                       </button>
                       <button
                         onClick={() => act(v.uuid, 'remove')}

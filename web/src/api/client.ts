@@ -128,6 +128,7 @@ export const api = {
 
   docker: {
     containers: () => request<any[]>('/docker/containers'),
+    container: (id: string) => request<any>(`/docker/containers/${id}`),
     stats: () => request<any[]>('/docker/stats'),
     create: (body: any) =>
       request<any>('/docker/containers', { method: 'POST', body: JSON.stringify(body) }),
@@ -252,6 +253,7 @@ export const api = {
 
   vms: {
     list: () => request<any[]>('/vms'),
+    vm: (uuid: string) => request<any>(`/vms/${uuid}`),
     stats: () => request<any[]>('/vms/stats'),
     create: (body: any) =>
       request<any>('/vms', { method: 'POST', body: JSON.stringify(body) }),
