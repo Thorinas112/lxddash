@@ -261,7 +261,7 @@ func (s *Service) domainInfo(ctx context.Context, d libvirt.Domain) (DomainInfo,
 		Name:      d.Name,
 		State:     stateString(libvirt.DomainState(state)),
 		VCPUs:     domXML.VCPU,
-		Memory:    domXML.Memory,
+		Memory:    domXML.Memory * 1024, // libvirt returns KiB, convert to bytes
 		VNC:       vnc,
 		Autostart: autostart == 1,
 	}, nil
@@ -805,12 +805,12 @@ func (s *Service) AttachISO(ctx context.Context, uuid string, isoName string) er
 	args := []string{}
 	if isoName != "" {
 		isoPath := filepath.Join(s.isoDir, filepath.Base(isoName))
-		args = []string{"attach-disk", domXML.Name, isoPath, "sda", "--type", "cdrom", "--mode", "readonly"}
+		args = []string{"attach-disk", domXML.Name, isoPath, "sda", "--type", "cdrom", "--mode", "readonly", "--persistent"}
 	} else {
 		// Detach: find existing cdrom device name
 		for _, dk := range domXML.Devices.Disks {
 			if dk.Device == "cdrom" {
-				args = []string{"detach-disk", domXML.Name, dk.Target.Dev}
+				args = []string{"detach-disk", domXML.Name, dk.Target.Dev, "--persistent"}
 				break
 			}
 		}
