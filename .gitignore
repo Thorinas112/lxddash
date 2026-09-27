@@ -1,0 +1,26 @@
+# Build output
+bin/
+build/
+web/dist/
+
+# Dependencies
+web/node_modules/
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/settings.json
+
+# Data (runtime, never commit)
+data/
+*.json.bak
+
+# WSL temp
+/tmp/
+/lxddash-log.txt

@@ -1,0 +1,34 @@
+# LXD Dash — containerized deployment
+#
+#   docker compose up -d
+#
+# network_mode: host is REQUIRED — the VNC console proxy connects to
+# VNC ports on the host loopback, and the app manages host services
+# through the mounted sockets.
+services:
+  lxddash:
+    build: .
+    container_name: lxddash
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - LXDDASH_LISTEN=:8080
+      - LXDDASH_DATA_DIR=/var/lib/lxddash
+      - LXDDASH_STATIC_DIR=/usr/share/lxddash/web
+      - LXDDASH_PROXMOX_DUMP_DIR=/var/lib/vz/dump
+      - LXDDASH_VM_IMAGE_DIR=/var/lib/libvirt/images
+    volumes:
+      # Host service sockets (management)
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
+      # LXD — auto-detect snap vs apt socket (uncomment the one that exists):
+      - /var/snap/lxd/common/lxd/unix.socket:/var/snap/lxd/common/lxd/unix.socket
+      # - /var/lib/lxd/unix.socket:/var/lib/lxd/unix.socket
+      # Data (persists across restarts)
+      - lxddash-data:/var/lib/lxddash
+      # Proxmox backups + VM images
+      - /var/lib/vz/dump:/var/lib/vz/dump
+      - /var/lib/libvirt/images:/var/lib/libvirt/images
+
+volumes:
+  lxddash-data:

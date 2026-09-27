@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build",
+			"type": "shell",
+			"command": "cd web; npm.cmd run build; cd ..; & \"$env:USERPROFILE\\go-sdk\\bin\\go.exe\" build -o bin/lxddash.exe ./cmd/server",
+			"problemMatcher": [
+				"$tsc",
+				"$go"
+			],
+			"group": "build"
+		}
+	]
+}

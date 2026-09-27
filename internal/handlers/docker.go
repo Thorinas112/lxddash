@@ -1,0 +1,296 @@
+package handlers
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+
+	"lxddash/internal/services/docker"
+)
+
+func (h *Handlers) DockerContainers(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	all := r.URL.Query().Get("all") != "false"
+	cs, err := h.deps.Docker.Containers(r.Context(), all)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, cs)
+}
+
+// DockerStats returns live CPU/memory/network usage for all running
+// containers.
+func (h *Handlers) DockerStats(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	stats, err := h.deps.Docker.Stats(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+func (h *Handlers) DockerContainer(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	c, err := h.deps.Docker.Container(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (h *Handlers) DockerCreateContainer(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	var req docker.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	id, err := h.deps.Docker.CreateContainer(r.Context(), req)
+	if err != nil {
+		h.logActivity("docker", "create", req.Name, "", err)
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.logActivity("docker", "create", req.Name, "container created", nil)
+	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+}
+
+func (h *Handlers) DockerStartContainer(w http.ResponseWriter, r *http.Request) {
+	h.dockerAction(w, r, "start")
+}
+
+func (h *Handlers) DockerStopContainer(w http.ResponseWriter, r *http.Request) {
+	h.dockerAction(w, r, "stop")
+}
+
+func (h *Handlers) DockerRestartContainer(w http.ResponseWriter, r *http.Request) {
+	h.dockerAction(w, r, "restart")
+}
+
+func (h *Handlers) dockerAction(w http.ResponseWriter, r *http.Request, action string) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	id := r.PathValue("id")
+	var err error
+	switch action {
+	case "start":
+		err = h.deps.Docker.Start(r.Context(), id)
+	case "stop":
+		err = h.deps.Docker.Stop(r.Context(), id)
+	case "restart":
+		err = h.deps.Docker.Restart(r.Context(), id)
+	}
+	if err != nil {
+		h.logActivity("docker", action, id, "", err)
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.logActivity("docker", action, id, "", nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handlers) DockerRemoveContainer(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	id := r.PathValue("id")
+	if err := h.deps.Docker.Remove(r.Context(), id, true); err != nil {
+		h.logActivity("docker", "remove", id, "", err)
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.logActivity("docker", "remove", id, "container removed", nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handlers) DockerContainerLogs(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	tail := r.URL.Query().Get("tail")
+	if tail == "" {
+		tail = "200"
+	}
+	rc, err := h.deps.Docker.Logs(r.Context(), r.PathValue("id"), tail)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", "text/plain")
+	_, _ = io.Copy(w, rc)
+}
+
+func (h *Handlers) DockerImages(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	imgs, err := h.deps.Docker.Images(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, imgs)
+}
+
+type pullImageRequest struct {
+	Ref string `json:"ref"`
+}
+
+func (h *Handlers) DockerPullImage(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	var req pullImageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.deps.Docker.PullImage(r.Context(), req.Ref); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "pulled"})
+}
+
+func (h *Handlers) DockerRemoveImage(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	if err := h.deps.Docker.RemoveImage(r.Context(), r.PathValue("id")); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handlers) DockerNetworks(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	ns, err := h.deps.Docker.Networks(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, ns)
+}
+
+func (h *Handlers) DockerVolumes(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	vs, err := h.deps.Docker.Volumes(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, vs)
+}
+
+func (h *Handlers) DockerRemoveVolume(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	name := r.PathValue("name")
+	if err := h.deps.Docker.RemoveVolume(r.Context(), name); err != nil {
+		h.logActivity("docker", "remove-volume", name, "", err)
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.logActivity("docker", "remove-volume", name, "volume removed", nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handlers) DockerRemoveNetwork(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	id := r.PathValue("id")
+	if err := h.deps.Docker.RemoveNetwork(r.Context(), id); err != nil {
+		h.logActivity("docker", "remove-network", id, "", err)
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.logActivity("docker", "remove-network", id, "network removed", nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+type composeRequest struct {
+	Dir string `json:"dir"`
+}
+
+func (h *Handlers) DockerComposeUp(w http.ResponseWriter, r *http.Request) {
+	h.dockerCompose(w, r, "up")
+}
+
+func (h *Handlers) DockerComposeDown(w http.ResponseWriter, r *http.Request) {
+	h.dockerCompose(w, r, "down")
+}
+
+func (h *Handlers) DockerComposePull(w http.ResponseWriter, r *http.Request) {
+	h.dockerCompose(w, r, "pull")
+}
+
+func (h *Handlers) DockerComposePS(w http.ResponseWriter, r *http.Request) {
+	h.dockerCompose(w, r, "ps")
+}
+
+func (h *Handlers) dockerCompose(w http.ResponseWriter, r *http.Request, action string) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	var req composeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Dir == "" {
+		writeErr(w, http.StatusBadRequest, "dir is required")
+		return
+	}
+	var out string
+	var err error
+	switch action {
+	case "up":
+		out, err = h.deps.Docker.ComposeUp(r.Context(), req.Dir)
+	case "down":
+		out, err = h.deps.Docker.ComposeDown(r.Context(), req.Dir)
+	case "pull":
+		out, err = h.deps.Docker.ComposePull(r.Context(), req.Dir)
+	case "ps":
+		out, err = h.deps.Docker.ComposePS(r.Context(), req.Dir)
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": out})
+}

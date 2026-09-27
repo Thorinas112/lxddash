@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+#
+# LXD Dash installer for Ubuntu/Debian servers
+#
+# Quick install (one-liner from GitHub):
+#   curl -sL https://raw.githubusercontent.com/YOUR_ORG/lxddash/main/deploy/install.sh | sudo bash
+#
+# Local install (from cloned repo):
+#   sudo bash install.sh               # full install (deps + app)
+#   sudo bash install.sh --skip-deps   # only install the app (deps already present)
+#   sudo bash install.sh --port 9000   # listen on a custom port
+#   sudo bash install.sh --no-proxmox  # skip Proxmox import tooling (qemu-utils, lxd-client)
+#   sudo bash install.sh --uninstall   # remove LXD Dash completely
+#
+# The script looks for a prebuilt binary in this order:
+#   1. bin/lxddash-linux   (cross-compiled on Windows: make cross)
+#   2. bin/lxddash         (built on the server: make backend)
+#   3. Downloads from GitHub releases (if REPO is not a local checkout)
+#   4. Builds from source  (requires Go 1.22+)
+#
+set -euo pipefail
+
+PORT="8080"
+SKIP_DEPS=0
+WITH_PROXMOX=1
+UNINSTALL=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-deps) SKIP_DEPS=1 ;;
+    --no-proxmox) WITH_PROXMOX=0 ;;
+    --uninstall) UNINSTALL=1 ;;
+    --port=*) PORT="${1#*=}" ;;
+    --port) PORT="$2"; shift ;;
+    -h|--help)
+      sed -n '2,16p' "$0"
+      exit 0
+      ;;
+    *) echo "unknown argument: $1 (see --help)" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+# ---------------------------------------------------------------------------
+# Uninstall
+# ---------------------------------------------------------------------------
+if [[ $UNINSTALL -eq 1 ]]; then
+  echo "==> Uninstalling LXD Dash..."
+  systemctl disable --now lxddash 2>/dev/null || true
+  rm -f /etc/systemd/system/lxddash.service
+  systemctl daemon-reload 2>/dev/null || true
+  rm -f /usr/local/bin/lxddash
+  rm -rf /usr/share/lxddash
+  rm -f /etc/lxddash/config.json
+  rmdir /etc/lxddash 2>/dev/null || true
+  # Keep /var/lib/lxddash (data) — user can remove manually if desired
+  echo "==> LXD Dash removed. Data preserved at /var/lib/lxddash"
+  echo "    To remove data: sudo rm -rf /var/lib/lxddash"
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+
+# ---------------------------------------------------------------------------
+# 0. Prerequisites
+# ---------------------------------------------------------------------------
+if [[ $EUID -ne 0 ]]; then
+  echo "error: run as root: sudo bash install.sh" >&2
+  exit 1
+fi
+
+if [[ -f /etc/os-release ]]; then
+  . /etc/os-release
+else
+  ID="unknown"
+fi
+if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
+  echo "error: unsupported distro '$ID' — LXD Dash targets Ubuntu/Debian" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 1. System dependencies
+# ---------------------------------------------------------------------------
+if [[ $SKIP_DEPS -eq 0 ]]; then
+  echo "==> Installing system dependencies..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y curl ca-certificates qemu-kvm libvirt-daemon-system
+
+  if [[ $WITH_PROXMOX -eq 1 ]]; then
+    # qemu-img (disk conversion) + lxc CLI (rootfs import into LXD)
+    apt-get install -y qemu-utils lxd-client || true
+  fi
+
+  # Docker (official install script)
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "==> Installing Docker..."
+    curl -fsSL https://get.docker.com | sh
+  fi
+
+  # LXD (snap)
+  if ! command -v lxc >/dev/null 2>&1 && ! command -v lxd >/dev/null 2>&1; then
+    echo "==> Installing LXD (snap)..."
+    snap install lxd
+  fi
+
+  # vma (Proxmox VMA extractor) — only available from Proxmox repos
+  if [[ $WITH_PROXMOX -eq 1 ]] && ! command -v vma >/dev/null 2>&1; then
+    echo "==> NOTE: the 'vma' tool was not found."
+    echo "    It is required to import QEMU VM backups from Proxmox."
+    echo "    It ships with Proxmox VE only; on Ubuntu you can skip VM imports"
+    echo "    (LXC container imports still work) or install it manually."
+  fi
+
+  # Start services
+  systemctl enable --now libvirtd 2>/dev/null || true
+  systemctl enable --now docker 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Locate or build the binary
+# ---------------------------------------------------------------------------
+BINARY=""
+for candidate in "$REPO_DIR/bin/lxddash-linux" "$REPO_DIR/bin/lxddash"; do
+  if [[ -x "$candidate" ]]; then
+    BINARY="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$BINARY" ]]; then
+  if command -v go >/dev/null 2>&1; then
+    echo "==> No prebuilt binary found, building from source..."
+    (cd "$REPO_DIR" && go build -o bin/lxddash-linux ./cmd/server)
+    BINARY="$REPO_DIR/bin/lxddash-linux"
+  else
+    echo "error: no prebuilt binary found and Go is not installed." >&2
+    echo "  Build one on your dev machine with: make cross" >&2
+    echo "  or install Go: apt install golang-go" >&2
+    exit 1
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Install files
+# ---------------------------------------------------------------------------
+echo "==> Installing LXD Dash ($BINARY)..."
+install -d /usr/local/bin /etc/lxddash /var/lib/lxddash \
+  /usr/share/lxddash/web /var/lib/vz/dump /var/lib/libvirt/images
+install -m 0755 "$BINARY" /usr/local/bin/lxddash
+
+# Frontend (built web/dist) — required for the web UI
+if [[ -d "$REPO_DIR/web/dist" ]]; then
+  cp -r "$REPO_DIR/web/dist/." /usr/share/lxddash/web/
+else
+  echo "warning: web/dist not found — the web UI will not be served." >&2
+  echo "  Build it with: cd web && npm install && npm run build" >&2
+fi
+
+# Detect LXD socket (snap vs apt)
+LXD_SOCKET="/var/lib/lxd/unix.socket"
+if [[ -S /var/snap/lxd/common/lxd/unix.socket ]]; then
+  LXD_SOCKET="/var/snap/lxd/common/lxd/unix.socket"
+  echo "  Detected snap LXD socket"
+elif [[ -S /var/lib/lxd/unix.socket ]]; then
+  echo "  Detected apt LXD socket"
+else
+  echo "  warning: LXD socket not found — LXD features may not work" >&2
+fi
+
+# Config (only if not already present)
+if [[ ! -f /etc/lxddash/config.json ]]; then
+  cat > /etc/lxddash/config.json <<EOF
+{
+  "listen_addr": ":$PORT",
+  "data_dir": "/var/lib/lxddash",
+  "static_dir": "/usr/share/lxddash/web",
+  "lxd_unix_socket": "$LXD_SOCKET",
+  "libvirt_uri": "qemu:///system",
+  "proxmox_dump_dir": "/var/lib/vz/dump",
+  "proxmox_staging": "/var/lib/lxddash/staging",
+  "vm_image_dir": "/var/lib/libvirt/images"
+}
+EOF
+  echo "==> Wrote /etc/lxddash/config.json (listen port $PORT)"
+else
+  echo "==> Keeping existing /etc/lxddash/config.json"
+fi
+
+# Sudoers — allow lxddash user to run apt/dnf without password (for updates page)
+SUDOERS_FILE="/etc/sudoers.d/lxddash"
+if [[ ! -f "$SUDOERS_FILE" ]]; then
+  # Detect the user that will run the service (default: root)
+  SVC_USER="root"
+  if id lxddash >/dev/null 2>&1; then
+    SVC_USER="lxddash"
+  fi
+  cat > "$SUDOERS_FILE" <<EOF
+# LXD Dash — allow software updates from the web UI
+$SVC_USER ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/apt-get, /usr/bin/dnf
+EOF
+  chmod 0440 "$SUDOERS_FILE"
+  echo "==> Wrote $SUDOERS_FILE"
+fi
+
+# systemd unit
+install -m 0644 "$SCRIPT_DIR/lxddash.service" /etc/systemd/system/lxddash.service
+systemctl daemon-reload
+systemctl enable --now lxddash
+
+# ---------------------------------------------------------------------------
+# 4. Done
+# ---------------------------------------------------------------------------
+sleep 1
+if systemctl is-active --quiet lxddash; then
+  IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  echo
+  echo "============================================================"
+  echo " LXD Dash installed and running!"
+  echo "   URL:      http://${IP:-<server-ip>}:$PORT"
+  echo "   First run: the browser will ask you to create the admin"
+  echo "              account (username + password)"
+  echo "   Logs:     journalctl -u lxddash -f"
+  echo "   Config:   /etc/lxddash/config.json"
+  echo "============================================================"
+else
+  echo "error: the lxddash service failed to start." >&2
+  echo "  Check the logs: journalctl -u lxddash -n 50" >&2
+  exit 1
+fi

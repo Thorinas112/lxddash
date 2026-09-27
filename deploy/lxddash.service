@@ -1,0 +1,15 @@
+[Unit]
+Description=LXD Dash - server management dashboard
+After=network-online.target lxd.service libvirtd.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lxddash -config /etc/lxddash/config.json
+Restart=on-failure
+RestartSec=5
+# Ensure app can reach Docker, LXD, libvirt sockets
+SupplementaryGroups=docker lxd libvirt
+
+[Install]
+WantedBy=multi-user.target
