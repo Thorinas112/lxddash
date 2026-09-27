@@ -65,7 +65,6 @@ function fmtCPUTime(ns: number): string {
 export default function LXD() {
   const [instances, setInstances] = useState<Instance[]>([])
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null)
   const [editFor, setEditFor] = useState<string | null>(null)
@@ -107,18 +106,6 @@ export default function LXD() {
     const t = setInterval(() => load(), 60000)
     return () => clearInterval(t)
   }, [load])
-
-  async function act(name: string, action: 'start' | 'stop' | 'restart' | 'remove') {
-    setBusy(name)
-    try {
-      await api.lxd.action(name, action)
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setBusy('')
-    }
-  }
 
   function ipv4(inst: Instance): string {
     const nets = inst.state?.network || {}
@@ -199,7 +186,6 @@ export default function LXD() {
               <th className="px-4 py-3">IPv4</th>
               <th className="px-4 py-3">Updates</th>
               <th className="px-4 py-3">Tags</th>
-              <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -291,88 +277,12 @@ export default function LXD() {
                     </div>
                   )}
                 </td>
-                <td className="whitespace-nowrap px-4 py-3 text-right">
-                  {busy === inst.name ? (
-                    <Spinner />
-                  ) : (
-                    <div className="flex justify-end gap-1">
-                      {inst.status !== 'Running' && (
-                        <button
-                          onClick={() => act(inst.name, 'start')}
-                          className={btnAction('bg-green-100 text-green-700')}
-                        >
-                          Start
-                        </button>
-                      )}
-                      {inst.status === 'Running' && (
-                        <button
-                          onClick={() => act(inst.name, 'stop')}
-                          className={btnAction('bg-yellow-100 text-yellow-700')}
-                        >
-                          Stop
-                        </button>
-                      )}
-                      <button
-                        onClick={() => act(inst.name, 'restart')}
-                        className={btnAction('bg-blue-100 text-blue-700')}
-                      >
-                        Restart
-                      </button>
-                      <button
-                        onClick={() => setSnapshotsFor(inst.name)}
-                        className={btnAction('bg-purple-100 text-purple-700')}
-                      >
-                        Snapshots
-                      </button>
-                      <button
-                        onClick={() => setBackupsFor(inst.name)}
-                        className={btnAction('bg-amber-100 text-amber-700')}
-                      >
-                        Backups
-                      </button>
-                      <button
-                        onClick={() => setFilesFor(inst.name)}
-                        className={btnAction('bg-orange-100 text-orange-700')}
-                      >
-                        Files
-                      </button>
-                      <button
-                        onClick={() => setEditFor(inst.name)}
-                        className={btnAction('bg-teal-100 text-teal-700')}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => setGraphsFor(inst.name)}
-                        className={btnAction('bg-indigo-100 text-indigo-700')}
-                      >
-                        Graphs
-                      </button>
-                      <button
-                        onClick={() => {
-                          const token = localStorage.getItem('lxddash_token') || ''
-                          const url = `/lxd/${encodeURIComponent(inst.name)}/console-popup?token=${token}`
-                          window.open(url, `_blank_${inst.name}_console`, 'width=900,height=600,menubar=no,toolbar=no,location=no,status=no')
-                        }}
-                        className={btnAction('bg-cyan-100 text-cyan-700')}
-                      >
-                        Console
-                      </button>
-                      <button
-                        onClick={() => act(inst.name, 'remove')}
-                        className={btnAction('bg-red-100 text-red-700')}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  )}
-                </td>
               </tr>
               )
             })}
             {instances.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
                   No instances found
                 </td>
               </tr>

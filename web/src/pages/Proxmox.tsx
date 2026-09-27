@@ -20,6 +20,7 @@ interface Task {
   type: string
   source: string
   status: string
+  progress: number
   message: string
   created_at: string
   updated_at: string

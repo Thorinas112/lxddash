@@ -26,10 +26,16 @@ export default function TerminalView({ wsPath, title, onClose }: Props) {
 
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 13,
+      fontSize: 15,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      theme: { background: '#0d1117', foreground: '#e6edf3' },
-      scrollback: 5000,
+      theme: {
+        background: '#0d1117',
+        foreground: '#e6edf3',
+        cursor: '#58a6ff',
+        selectionBackground: '#264f78',
+      },
+      scrollback: 10000,
+      allowProposedApi: true,
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
