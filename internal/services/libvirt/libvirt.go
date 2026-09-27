@@ -801,22 +801,23 @@ func (s *Service) AttachISO(ctx context.Context, uuid string, isoName string) er
 
 	// Rebuild the XML by doing string replacement — find the <devices> block
 	// and replace disk elements. This is fragile but simpler than full XML rebuild.
-	// Use virsh for reliability instead.
+	// First detach any existing cdrom to avoid "target already exists" errors.
+	for _, dk := range domXML.Devices.Disks {
+		if dk.Device == "cdrom" {
+			detachArgs := []string{"detach-disk", domXML.Name, dk.Target.Dev, "--persistent"}
+			cmd := exec.CommandContext(ctx, "virsh", detachArgs...)
+			_, _ = cmd.CombinedOutput() // ignore errors — device may not exist
+			break
+		}
+	}
+
+	// Now attach or detach.
 	args := []string{}
 	if isoName != "" {
 		isoPath := filepath.Join(s.isoDir, filepath.Base(isoName))
 		args = []string{"attach-disk", domXML.Name, isoPath, "sda", "--type", "cdrom", "--mode", "readonly", "--persistent"}
 	} else {
-		// Detach: find existing cdrom device name
-		for _, dk := range domXML.Devices.Disks {
-			if dk.Device == "cdrom" {
-				args = []string{"detach-disk", domXML.Name, dk.Target.Dev, "--persistent"}
-				break
-			}
-		}
-		if len(args) == 0 {
-			return fmt.Errorf("no cdrom device to detach")
-		}
+		return nil // already detached above
 	}
 
 	cmd := exec.CommandContext(ctx, "virsh", args...)
