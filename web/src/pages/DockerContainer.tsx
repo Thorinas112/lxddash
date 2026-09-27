@@ -4,6 +4,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { api } from '../api/client'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'
+import TerminalView from '../components/TerminalView'
 import { btnAction, btnGhost } from '../components/ui'
 
 type Tab = 'overview' | 'logs' | 'graphs' | 'console'
@@ -361,9 +362,11 @@ export default function DockerContainer() {
 
       {/* === CONSOLE TAB === */}
       {tab === 'console' && (
-        <div className="rounded-lg border border-gray-200 bg-white p-8 text-center">
-          <div className="text-gray-400 text-sm">Console coming soon</div>
-          <p className="mt-2 text-xs text-gray-500">Docker exec WebSocket support will be available in a future release.</p>
+        <div style={{ height: '500px', borderRadius: 8, overflow: 'hidden', border: '1px solid #e5e7eb' }}>
+          <TerminalView
+            wsPath={`/api/docker/containers/${id}/exec`}
+            title={`Docker Console - ${containerName}`}
+          />
         </div>
       )}
     </div>

@@ -176,6 +176,49 @@ func (s *Service) Logs(ctx context.Context, id, tail string) (io.ReadCloser, err
 	})
 }
 
+// Exec starts an interactive shell inside a running container.
+// It returns streams for stdin/stdout that can be bridged to a WebSocket.
+func (s *Service) Exec(ctx context.Context, id string, stdin io.Reader, stdout io.Writer) error {
+	// Create exec instance with TTY — use sh for maximum compatibility.
+	execCfg := client.ExecCreateOptions{
+		Cmd:          []string{"/bin/sh"},
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		TTY:          true,
+	}
+	resp, err := s.cli.ExecCreate(ctx, id, execCfg)
+	if err != nil {
+		return fmt.Errorf("exec create: %w", err)
+	}
+
+	// Attach to the exec (bidirectional streams).
+	attachResp, err := s.cli.ExecAttach(ctx, resp.ID, client.ExecAttachOptions{TTY: true})
+	if err != nil {
+		return fmt.Errorf("exec attach: %w", err)
+	}
+	defer attachResp.Close()
+
+	// Start the exec.
+	go func() {
+		_, _ = s.cli.ExecStart(ctx, resp.ID, client.ExecStartOptions{TTY: true})
+	}()
+
+	// Pump stdin -> exec, exec -> stdout.
+	errCh := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(attachResp.Conn, stdin)
+		errCh <- err
+	}()
+	go func() {
+		_, err := io.Copy(stdout, attachResp.Reader)
+		errCh <- err
+	}()
+
+	// Wait for either direction to finish.
+	return <-errCh
+}
+
 func (s *Service) Images(ctx context.Context) ([]image.Summary, error) {
 	res, err := s.cli.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {

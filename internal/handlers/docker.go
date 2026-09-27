@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+
+	"github.com/gorilla/websocket"
 
 	"lxddash/internal/services/docker"
 )
@@ -293,4 +296,83 @@ func (h *Handlers) dockerCompose(w http.ResponseWriter, r *http.Request, action 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": out})
+}
+
+// DockerExec opens a WebSocket that bridges to an interactive shell inside a Docker container.
+func (h *Handlers) DockerExec(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	id := r.PathValue("id")
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Start exec in goroutine.
+	execErr := make(chan error, 1)
+	go func() {
+		execErr <- h.deps.Docker.Exec(ctx, id, stdinR, stdoutW)
+	}()
+
+	// Stream exec stdout -> browser WebSocket.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdoutR.Read(buf)
+			if n > 0 {
+				if werr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
+					cancel()
+					return
+				}
+			}
+			if err != nil {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	// Stream browser WebSocket -> exec stdin, handle resize messages.
+	for {
+		mt, data, err := conn.ReadMessage()
+		if err != nil {
+			cancel()
+			break
+		}
+		if mt == websocket.TextMessage {
+			var msg struct {
+				Type string `json:"type"`
+				Cols int    `json:"cols"`
+				Rows int    `json:"rows"`
+			}
+			if err := json.Unmarshal(data, &msg); err == nil && msg.Type == "resize" {
+				// Docker exec doesn't support resize through the API the same way,
+				// but we accept the message silently.
+				continue
+			}
+			if _, werr := stdinW.Write(data); werr != nil {
+				cancel()
+				break
+			}
+			continue
+		}
+		if mt == websocket.BinaryMessage {
+			if _, werr := stdinW.Write(data); werr != nil {
+				cancel()
+				break
+			}
+		}
+	}
+
+	<-execErr
 }
