@@ -218,14 +218,23 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 		return err
 	}
 
-	cfg, err := parsePVEConfig(filepath.Join(dir, "config"))
+	// Newer Proxmox backups store config at etc/vzdump/pct.conf and extract
+	// the rootfs flat (no rootfs/ subdirectory). Older backups use config +
+	// rootfs/ at the archive root.
+	cfgPath := filepath.Join(dir, "config")
+	if _, err := os.Stat(cfgPath); err != nil {
+		cfgPath = filepath.Join(dir, "etc", "vzdump", "pct.conf")
+	}
+	cfg, err := parsePVEConfig(cfgPath)
 	if err != nil {
 		return err
 	}
 
 	rootfsDir := filepath.Join(dir, "rootfs")
 	if _, err := os.Stat(rootfsDir); err != nil {
-		return fmt.Errorf("no rootfs directory found in backup")
+		// Newer format: rootfs is flat — files are directly in dir.
+		// Use the staging dir itself as the rootfs source.
+		rootfsDir = dir
 	}
 
 	name := cfg.Hostname
