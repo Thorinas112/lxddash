@@ -18,16 +18,12 @@ export default function Console() {
   }, [uuid])
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">VNC Console</h1>
-        <a href="/vms" className="text-sm text-blue-600 hover:underline">
-          ← Back to VMs
-        </a>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#000' }}>
+      <div className="flex items-center justify-between" style={{ padding: '8px 16px', background: '#1a1a2e', color: '#e0e0e0' }}>
+        <h1 style={{ fontSize: 14, fontWeight: 600 }}>VNC Console</h1>
+        <a href="/vms" style={{ fontSize: 12, color: '#60a5fa' }}>Back to VMs</a>
       </div>
-      <div className="flex-1 overflow-hidden rounded-lg border border-gray-200 bg-black">
-        <div ref={ref} className="h-full w-full" />
-      </div>
+      <div ref={ref} style={{ flex: 1, overflow: 'hidden' }} />
     </div>
   )
 }
