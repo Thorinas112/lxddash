@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -95,6 +96,36 @@ func (s *Service) NotifyVM(name, state string) {
 		Type:      "vm_state",
 		Title:     "VM " + state,
 		Message:   "VM \"" + name + "\" is now " + state,
+		Timestamp: time.Now(),
+	})
+}
+
+// NotifyLXD sends an LXD instance lifecycle notification.
+func (s *Service) NotifyLXD(name, action string) {
+	s.Send(Event{
+		Type:      "lxd_" + action,
+		Title:     "LXD " + action,
+		Message:   "Instance \"" + name + "\" was " + action,
+		Timestamp: time.Now(),
+	})
+}
+
+// NotifyDocker sends a Docker container lifecycle notification.
+func (s *Service) NotifyDocker(name, action string) {
+	s.Send(Event{
+		Type:      "docker_" + action,
+		Title:     "Docker " + action,
+		Message:   "Container \"" + name + "\" was " + action,
+		Timestamp: time.Now(),
+	})
+}
+
+// NotifyAlert sends a threshold alert notification.
+func (s *Service) NotifyAlert(metric string, value float64, threshold float64) {
+	s.Send(Event{
+		Type:      "alert",
+		Title:     "Threshold alert",
+		Message:   fmt.Sprintf("%s at %.1f%% (threshold: %.1f%%)", metric, value, threshold),
 		Timestamp: time.Now(),
 	})
 }

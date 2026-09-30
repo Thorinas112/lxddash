@@ -1,4 +1,4 @@
-﻿import { NavLink, useNavigate } from 'react-router-dom'
+﻿import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { ReactNode, useEffect, useRef, useState } from 'react'
 import { api, clearToken } from '../api/client'
 import {
@@ -22,16 +22,17 @@ import {
   IconTerminal,
 } from './icons'
 
+// match patterns: parent routes stay highlighted for their child routes
 const nav = [
   { to: '/', label: 'Dashboard', icon: IconDashboard },
-  { to: '/docker', label: 'Docker', icon: IconBox },
-  { to: '/lxd', label: 'LXD', icon: IconLayers },
+  { to: '/docker', label: 'Docker', icon: IconBox, match: /^\/docker(\/|$)/ },
+  { to: '/lxd', label: 'LXD', icon: IconLayers, match: /^\/lxd(\/|$)/ },
   { to: '/lxd/images', label: 'Images', icon: IconImage },
   { to: '/lxd/profiles', label: 'Profiles', icon: IconList },
   { to: '/lxd/storage', label: 'Storage', icon: IconDatabase },
   { to: '/lxd/networks', label: 'Networks', icon: IconGlobe },
   { to: '/lxd/firewall', label: 'Firewall', icon: IconShield },
-  { to: '/vms', label: 'VMs', icon: IconMonitor },
+  { to: '/vms', label: 'VMs', icon: IconMonitor, match: /^\/vms(\/|$)/ },
   { to: '/proxmox', label: 'Proxmox', icon: IconRefresh },
   { to: '/activity', label: 'Activity', icon: IconList },
   { to: '/backups', label: 'Backups', icon: IconArchive },
@@ -45,6 +46,7 @@ const nav = [
 
 export default function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [runningJobs, setRunningJobs] = useState(0)
   const [updateCount, setUpdateCount] = useState(0)
   const [query, setQuery] = useState('')
@@ -204,12 +206,17 @@ export default function Layout({ children }: { children: ReactNode }) {
           )}
         </div>
         <nav className="flex-1 overflow-y-auto py-2">
-          {nav.map((n) => (
+          {nav.map((n) => {
+            // Determine active: use custom match regex if provided, otherwise NavLink's built-in
+            const isActive = n.match
+              ? n.match.test(location.pathname)
+              : location.pathname === n.to || (n.to !== '/' && location.pathname.startsWith(n.to + '/'))
+            return (
             <NavLink
               key={n.to}
               to={n.to}
-              end={n.to === '/' || n.to === '/lxd'}
-              className={({ isActive }) =>
+              end={n.to === '/' || !n.match}
+              className={
                 `flex items-center gap-3 px-4 py-2 text-[13px] ${
                   isActive
                     ? 'border-r-2 border-blue-400 bg-blue-600/20 text-blue-300'
@@ -232,7 +239,8 @@ export default function Layout({ children }: { children: ReactNode }) {
                 </span>
               )}
             </NavLink>
-          ))}
+            )
+          })}
         </nav>
         <button
           onClick={() => {

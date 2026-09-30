@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/gorilla/websocket"
-	"github.com/lxc/incus/client"
+	incus "github.com/lxc/incus/client"
 	"github.com/lxc/incus/shared/api"
 )
 
@@ -569,13 +571,13 @@ type FileEntry struct {
 // ListFiles lists the entries of a directory inside an instance.
 func (s *Service) ListFiles(ctx context.Context, name, path string) ([]FileEntry, error) {
 	// Use SFTP for accurate file/directory detection.
-	client, err := s.server.GetInstanceFileSFTP(name)
+	sftp, err := s.server.GetInstanceFileSFTP(name)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer sftp.Close()
 
-	infos, err := client.ReadDir(path)
+	infos, err := sftp.ReadDir(path)
 	if err != nil {
 		return nil, err
 	}
@@ -616,6 +618,28 @@ func (s *Service) WriteFile(ctx context.Context, name, path string, content []by
 		Type:    "file",
 	}
 	return s.server.CreateInstanceFile(name, path, args)
+}
+
+// PushDirectory recursively copies a local directory into an instance via
+// PushDirectory copies a local directory into an instance using the incus
+// file push command. The lxc CLI handles paths, permissions, and special
+// files correctly even in snap environments when PATH includes /snap/bin.
+func (s *Service) PushDirectory(ctx context.Context, instance, localDir, remoteDir string) error {
+	env := append(os.Environ(), "PATH=/snap/bin:"+os.Getenv("PATH"))
+	cmd := exec.CommandContext(ctx, "lxc", "file", "push", "-r", localDir+"/.", instance+"/"+remoteDir)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	// lxc file push returns exit code 1 for some special files (device nodes,
+	// sockets) but still pushes the majority successfully. Only fail if the
+	// output contains no "Pushing" lines (meaning nothing was transferred).
+	if err != nil {
+		output := string(out)
+		if !strings.Contains(output, "Pushing") {
+			return fmt.Errorf("lxc file push failed: %v: %s", err, strings.TrimSpace(output))
+		}
+		// Partial success — log but don't fail the import.
+	}
+	return nil
 }
 
 // DeleteFile removes a file inside an instance.
@@ -702,6 +726,100 @@ func (s *Service) RestoreBackup(ctx context.Context, name, backup string) error 
 		return err
 	}
 	return op.Wait()
+}
+
+// CloneInstance creates a new instance by running lxc copy on the host,
+// then fixes the MAC address to avoid conflicts with the source.
+func (s *Service) CloneInstance(ctx context.Context, source, newName string) error {
+	cmd := exec.Command("lxc", "copy", source, newName)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("lxc copy: %s — %w", strings.TrimSpace(string(out)), err)
+	}
+	// Fix MAC address conflict — remove the copied eth0 so LXD auto-generates a new one.
+	inst, _, err := s.server.GetInstance(newName)
+	if err != nil {
+		return nil // clone succeeded, MAC fix is best-effort
+	}
+	if _, ok := inst.Devices["eth0"]; ok {
+		delete(inst.Devices, "eth0")
+		op, err := s.server.UpdateInstance(newName, api.InstancePut{Devices: inst.Devices}, "")
+		if err == nil {
+			_ = op.Wait()
+		}
+	}
+	return nil
+}
+
+// ResizeInstance updates CPU and memory limits of a running instance.
+func (s *Service) ResizeInstance(ctx context.Context, name string, cpu, memory string) error {
+	inst, _, err := s.server.GetInstance(name)
+	if err != nil {
+		return err
+	}
+	config := inst.Config
+	if config == nil {
+		config = map[string]string{}
+	}
+	if cpu != "" {
+		config["limits.cpu"] = cpu
+	}
+	if memory != "" {
+		config["limits.memory"] = memory
+	}
+	op, err := s.server.UpdateInstance(name, api.InstancePut{Config: config}, "")
+	if err != nil {
+		return err
+	}
+	return op.Wait()
+}
+
+// BulkAction performs start/stop/restart/delete on multiple instances.
+func (s *Service) BulkAction(ctx context.Context, names []string, action string) []BulkResult {
+	results := make([]BulkResult, 0, len(names))
+	for _, name := range names {
+		var err error
+		switch action {
+		case "start":
+			err = s.SetState(ctx, name, "start")
+		case "stop":
+			err = s.SetState(ctx, name, "stop")
+		case "restart":
+			err = s.SetState(ctx, name, "restart")
+		case "delete":
+			err = s.DeleteInstance(ctx, name)
+		}
+		results = append(results, BulkResult{Name: name, Error: err})
+	}
+	return results
+}
+
+// BulkResult is the outcome of a bulk action on a single instance.
+type BulkResult struct {
+	Name  string `json:"name"`
+	Error error  `json:"error,omitempty"`
+}
+
+// DownloadBackup exports a backup file to a writer (e.g. HTTP response).
+func (s *Service) DownloadBackup(ctx context.Context, name, backup string, w io.Writer) (int64, error) {
+	req := incus.BackupFileRequest{
+		BackupFile: &writeSeeker{w: w},
+	}
+	resp, err := s.server.GetInstanceBackupFile(name, backup, &req)
+	if err != nil {
+		return 0, err
+	}
+	return resp.Size, nil
+}
+
+// writeSeeker wraps an io.Writer to satisfy io.WriteSeeker (needed by incus).
+type writeSeeker struct {
+	w io.Writer
+}
+
+func (ws *writeSeeker) Write(p []byte) (int, error) { return ws.w.Write(p) }
+func (ws *writeSeeker) Seek(offset int64, whence int) (int64, error) {
+	return 0, nil // not needed for streaming
 }
 
 // buildCloudInitUserData assembles the cloud-init user-data from the

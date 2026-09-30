@@ -18,6 +18,22 @@ func (h *Handlers) AuthStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"setup_required": h.deps.Auth.SetupRequired()})
 }
 
+// ResetPassword force-sets a new admin password (no old password required).
+func (h *Handlers) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Password == "" {
+		writeErr(w, http.StatusBadRequest, "password is required")
+		return
+	}
+	if err := h.deps.Auth.ResetPassword(req.Password); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "password reset"})
+}
+
 type setupRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`

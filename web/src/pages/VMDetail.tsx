@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api/client'
+import { confirm } from '../components/ConfirmDialog'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'
 import { btnAction, btnPrimary, inputCls } from '../components/ui'
@@ -18,14 +19,6 @@ function fmtBytes(n: number): string {
 function fmtMem(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
   return `${mb} MB`
-}
-
-// vm.memory is in bytes from the API, convert to display
-function fmtMemBytes(bytes: number): string {
-  if (!bytes) return '--'
-  const mb = bytes / (1024 * 1024)
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
-  return `${Math.round(mb)} MB`
 }
 
 function fmtUptime(s: number): string {
@@ -60,6 +53,7 @@ export default function VMDetail() {
 
   // Snapshots state
   const [snapshots, setSnapshots] = useState<any[]>([])
+  const [snapName, setSnapName] = useState('')
 
   // Graphs state
   const [graphPoints, setGraphPoints] = useState<{ t: number; cpu: number; mem: number; memUsage: number; memLimit: number }[]>([])
@@ -121,7 +115,7 @@ export default function VMDetail() {
   }
 
   async function remove() {
-    if (!confirm(`Delete VM ${vm?.name || uuid}? This cannot be undone.`)) return
+    if (!(await confirm(`Delete VM ${vm?.name || uuid}? This cannot be undone.`))) return
     setBusy('remove')
     try {
       await api.vms.action(uuid, 'remove')
@@ -226,7 +220,7 @@ export default function VMDetail() {
             </div>
             <div className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-xs uppercase tracking-wide text-gray-500">Memory</div>
-              <div className="mt-1 text-lg font-semibold text-gray-900">{vm?.memory ? fmtMemBytes(vm.memory) : '--'}</div>
+              <div className="mt-1 text-lg font-semibold text-gray-900">{vm?.memory ? fmtMem(vm.memory) : '--'}</div>
               {isRunning && st.mem_usage > 0 && (
                 <div className="mt-1 flex items-center gap-2">
                   <div className="h-1.5 w-24 overflow-hidden rounded bg-gray-200">
@@ -253,7 +247,50 @@ export default function VMDetail() {
             </div>
           )}
 
-          {/* Network Info */}
+          {/* Interfaces */}
+          <div className="rounded-lg border border-gray-200 bg-white">
+            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+              <span className="text-sm font-medium text-gray-700">Network interfaces</span>
+              {vm?.ip && (
+                <span className="text-xs text-gray-500">
+                  IPv4: <span className="font-mono font-medium text-gray-900">{vm.ip}</span> (DHCP lease)
+                </span>
+              )}
+            </div>
+            {vm?.interfaces && vm.interfaces.length > 0 ? (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+                  <tr>
+                    <th className="px-4 py-2">Name</th>
+                    <th className="px-4 py-2">MAC address</th>
+                    <th className="px-4 py-2">Model</th>
+                    <th className="px-4 py-2">Network</th>
+                    <th className="px-4 py-2">IP address</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {vm.interfaces.map((ifc: any, i: number) => (
+                    <tr key={ifc.name || i} className="bg-white">
+                      <td className="px-4 py-2 font-medium text-gray-900">{ifc.name}</td>
+                      <td className="px-4 py-2 font-mono text-gray-600">{ifc.mac || '—'}</td>
+                      <td className="px-4 py-2 text-gray-600">{ifc.model || '—'}</td>
+                      <td className="px-4 py-2 text-gray-600">{ifc.network || '—'}</td>
+                      <td className="px-4 py-2 font-mono text-gray-600">{i === 0 && vm.ip ? vm.ip : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="px-4 py-4 text-sm text-gray-500">
+                No network interfaces defined.
+              </div>
+            )}
+          </div>
+
+          {/* Network ports */}
+          <NetworkPortsSection uuid={uuid} running={isRunning} />
+
+          {/* Live Stats */}
           {isRunning && st && (
             <div className="rounded-lg border border-gray-200 bg-white">
               <div className="border-b border-gray-100 px-4 py-3 text-sm font-medium text-gray-700">Live Stats</div>
@@ -296,19 +333,20 @@ export default function VMDetail() {
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
             <span className="text-sm font-medium text-gray-700">Snapshots ({snapshots.length})</span>
             <button
+              disabled={!snapName}
               onClick={async () => {
-                const snap = prompt('Snapshot name:')
-                if (snap) {
-                  try {
-                    await api.vms.createSnapshot(uuid, snap)
-                    loadSnapshots()
-                  } catch (e: any) { setError(e.message) }
-                }
+                if (!snapName) return
+                try {
+                  await api.vms.createSnapshot(uuid, snapName)
+                  setSnapName('')
+                  loadSnapshots()
+                } catch (e: any) { setError(e.message) }
               }}
               className={btnPrimary}
             >
               + Create snapshot
             </button>
+            <input value={snapName} onChange={e => setSnapName(e.target.value)} placeholder="snapshot name" className={`${inputCls} ml-2 w-40`} onKeyDown={e => { if (e.key === 'Enter' && snapName) { api.vms.createSnapshot(uuid, snapName).then(() => { setSnapName(''); loadSnapshots() }).catch((err: any) => setError(err.message)) } }} />
           </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
@@ -329,7 +367,7 @@ export default function VMDetail() {
                     <div className="flex justify-end gap-1">
                       <button
                         onClick={async () => {
-                          if (confirm(`Revert to snapshot "${snap.name}"?`)) {
+                          if (await confirm(`Revert to snapshot "${snap.name}"?`)) {
                             try { await api.vms.revertSnapshot(uuid, snap.name); load() }
                             catch (e: any) { setError(e.message) }
                           }
@@ -340,7 +378,7 @@ export default function VMDetail() {
                       </button>
                       <button
                         onClick={async () => {
-                          if (confirm(`Delete snapshot "${snap.name}"?`)) {
+                          if (await confirm(`Delete snapshot "${snap.name}"?`)) {
                             try { await api.vms.deleteSnapshot(uuid, snap.name); loadSnapshots() }
                             catch (e: any) { setError(e.message) }
                           }
@@ -524,6 +562,174 @@ function AttachISOSection({ uuid, vm, isRunning, onDone, onError }: {
       {msg && (
         <div className="mt-3 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">{msg}</div>
       )}
+    </div>
+  )
+}
+
+// NetworkPortsSection scans the VM's IP for open TCP ports and offers
+// one-click localhost forwards (VMs on NAT networks are not reachable
+// directly from a PC, so a forward proxies host:port to the VM).
+function NetworkPortsSection({ uuid, running }: { uuid: string; running: boolean }) {
+  const [ip, setIp] = useState('')
+  const [ports, setPorts] = useState<{ port: number; service?: string }[]>([])
+  const [fwds, setFwds] = useState<any[]>([])
+  const [scanning, setScanning] = useState(false)
+  const [fullScan, setFullScan] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busyPort, setBusyPort] = useState(0)
+
+  const loadFwds = useCallback(async (vmIp: string) => {
+    if (!vmIp) return
+    try {
+      const all = await api.forwards.list()
+      setFwds(all.filter((f: any) => typeof f.target === 'string' && f.target.startsWith(vmIp + ':')))
+    } catch { /* ignore */ }
+  }, [])
+
+  const scan = useCallback(async (full: boolean) => {
+    setScanning(true)
+    setFullScan(full)
+    setError('')
+    setNotice('')
+    try {
+      const res = await api.vms.ports(uuid, full)
+      setIp(res.ip)
+      setPorts(res.ports || [])
+      await loadFwds(res.ip)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setScanning(false)
+    }
+  }, [uuid, loadFwds])
+
+  useEffect(() => {
+    if (running) scan(false)
+  }, [running, scan])
+
+  async function forward(p: number) {
+    setBusyPort(p)
+    setError('')
+    setNotice('')
+    try {
+      await api.forwards.add({ name: `vm-${uuid.slice(0, 8)}:${p}`, port: p, target: `${ip}:${p}` })
+      setNotice(`Forwarded — open http://localhost:${p} (proxied to ${ip}:${p})`)
+      await loadFwds(ip)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusyPort(0)
+    }
+  }
+
+  async function removeFwd(id: string) {
+    setBusyPort(-1)
+    try {
+      await api.forwards.remove(id)
+      await loadFwds(ip)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusyPort(0)
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white">
+      <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+        <span className="text-sm font-medium text-gray-700">
+          Network ports{ip && <span className="ml-2 font-mono text-xs font-normal text-gray-500">{ip}</span>}
+        </span>
+        <div className="flex gap-2">
+          <button onClick={() => scan(false)} disabled={scanning || !running} className={btnAction('bg-blue-100 text-blue-700')}>
+            Scan ports
+          </button>
+          <button onClick={() => scan(true)} disabled={scanning || !running} className={btnAction('bg-indigo-100 text-indigo-700')}>
+            Full scan
+          </button>
+        </div>
+      </div>
+      <div className="p-4">
+        {!running && (
+          <div className="text-sm text-gray-500">Start the VM to discover its network ports.</div>
+        )}
+        {running && scanning && (
+          <div className="flex items-center gap-2 text-sm text-gray-500">
+            <Spinner />
+            {fullScan ? 'Full scan running — this can take ~30s…' : 'Scanning common service ports…'}
+          </div>
+        )}
+        {error && (
+          <div className="mb-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>
+        )}
+        {notice && (
+          <div className="mb-2 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">{notice}</div>
+        )}
+        {running && !scanning && ip && ports.length === 0 && !error && (
+          <div className="text-sm text-gray-500">
+            No open TCP ports found{fullScan ? '' : ' in the common list — try a full scan'}.
+          </div>
+        )}
+        {ports.length > 0 && (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-gray-500">
+                <th className="py-2 pr-3">Port</th>
+                <th className="py-2 pr-3">Service</th>
+                <th className="py-2 text-right">Forward</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {ports.map((p) => {
+                const fwd = fwds.find((f: any) => f.target === `${ip}:${p.port}`)
+                return (
+                  <tr key={p.port}>
+                    <td className="py-1.5 pr-3 font-mono text-gray-900">:{p.port}</td>
+                    <td className="py-1.5 pr-3 text-gray-600">{p.service || '—'}</td>
+                    <td className="py-1.5 text-right">
+                      {fwd ? (
+                        <span className="inline-flex items-center gap-2">
+                          <a
+                            href={`http://localhost:${fwd.port}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm font-medium text-blue-600 hover:underline"
+                          >
+                            localhost:{fwd.port}
+                          </a>
+                          <button onClick={() => removeFwd(fwd.id)} className={btnAction('bg-red-100 text-red-700')}>
+                            Remove
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => forward(p.port)}
+                          disabled={busyPort !== 0}
+                          className={btnAction('bg-green-100 text-green-700')}
+                        >
+                          {busyPort === p.port ? '…' : 'Forward'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+        {fwds.length > 0 && (
+          <div className="mt-3 rounded border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600">
+            <div className="mb-1 font-medium text-gray-700">Active forwards to this VM</div>
+            {fwds.map((f: any) => (
+              <div key={f.id} className="flex items-center justify-between py-0.5">
+                <span className="font-mono">:{f.port} → {f.target}</span>
+                <button onClick={() => removeFwd(f.id)} className="text-red-600 hover:underline">remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

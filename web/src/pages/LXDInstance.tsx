@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api/client'
+import { confirm } from '../components/ConfirmDialog'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'
+import TerminalView from '../components/TerminalView'
 import { btnAction, btnGhost, btnPrimary, inputCls } from '../components/ui'
 
 function fmtUptime(s: number): string {
@@ -21,16 +23,7 @@ function fmtBytes(n: number): string {
   const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
   return `${(n / Math.pow(1024, i)).toFixed(1)} ${u[i]}`
 }
-function fmtCPUTime(ns: number): string {
-  if (!ns) return '--'
-  const s = ns / 1e9
-  if (s < 60) return `${s.toFixed(1)}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${Math.floor(s % 60)}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
-type Tab = 'overview' | 'configuration' | 'devices' | 'snapshots' | 'backups' | 'files' | 'graphs' | 'logs' | 'processes'
+type Tab = 'overview' | 'configuration' | 'devices' | 'snapshots' | 'backups' | 'files' | 'graphs' | 'logs' | 'processes' | 'console'
 type ConfigTab = 'boot' | 'cloud-init' | 'limits' | 'security' | 'migration' | 'raw'
 type DeviceTab = 'disk' | 'gpu' | 'network' | 'proxy' | 'unix'
 
@@ -40,8 +33,10 @@ export default function LXDInstance() {
   const navigate = useNavigate()
   const [inst, setInst] = useState<any>(null)
   const [state, setState] = useState<any>(null)
+  const [uptime, setUptime] = useState<number>(0)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const [tabBusy, setTabBusy] = useState('')
   const [tab, setTab] = useState<Tab>('overview')
   const [configTab, setConfigTab] = useState<ConfigTab>('boot')
   const [deviceTab, setDeviceTab] = useState<DeviceTab>('network')
@@ -53,6 +48,8 @@ export default function LXDInstance() {
   const [saveBusy, setSaveBusy] = useState(false)
   const [logsText, setLogsText] = useState('')
   const [processesText, setProcessesText] = useState('')
+  const [portsRaw, setPortsRaw] = useState<string>('')
+  const [tagInput, setTagInput] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -62,6 +59,7 @@ export default function LXDInstance() {
       ])
       setInst(instData)
       setState(stateData?.state || null)
+      setUptime(stateData?.uptime_seconds || 0)
       if (instData) setEditingConfig(instData.config || {})
     } catch (e: any) {
       setError(e.message)
@@ -99,6 +97,28 @@ export default function LXDInstance() {
     if (tab === 'logs') { api.lxd.logs(name).then(setLogsText).catch(() => setLogsText('No logs available')) }
     if (tab === 'processes') { api.lxd.processes(name).then(setProcessesText).catch(() => setProcessesText('No process data')) }
   }, [tab, name])
+  // Load ports on mount (for the Interfaces section on overview).
+  // Retry up to 3 times with delay if empty — the LXD exec API can
+  // occasionally return empty output due to a flush race condition.
+  useEffect(() => {
+    let cancelled = false
+    async function loadPorts(attempt = 0) {
+      try {
+        const d = await api.lxd.ports(name)
+        if (!cancelled && (d.output || '').trim()) {
+          setPortsRaw(d.output)
+        } else if (!cancelled && attempt < 2) {
+          setTimeout(() => loadPorts(attempt + 1), 500)
+        }
+      } catch {
+        if (!cancelled && attempt < 2) {
+          setTimeout(() => loadPorts(attempt + 1), 500)
+        }
+      }
+    }
+    loadPorts()
+    return () => { cancelled = true }
+  }, [name])
   useEffect(() => { loadUpdates() }, [loadUpdates])
 
   async function act(action: 'start' | 'stop' | 'restart') {
@@ -137,6 +157,43 @@ export default function LXDInstance() {
   const memUsage = state?.memory?.usage || 0
   const memTotal = state?.memory?.total || 0
   const memPct = memTotal > 0 ? (memUsage / memTotal) * 100 : 0
+  // CPU % = (total CPU nanoseconds / 1e9) / uptime_seconds / num_cores * 100
+  const cpuCores = parseInt(cfg['limits.cpu'] || '1', 10) || 1
+  const cpuNs = state?.cpu?.usage || 0
+  const cpuPct = uptime > 0 ? Math.min(100, (cpuNs / 1e9) / uptime / cpuCores * 100) : 0
+
+  // --- Port parsing for Interfaces table ---
+  interface PortEntry { addr: string; port: string; proto: string; process: string }
+  function parsePorts(raw: string): PortEntry[] {
+    if (!raw) return []
+    const sections = raw.split('---UDP---')
+    const tcpLines = (sections[0] || '').split('\n')
+    const udpLines = sections.length > 1 ? sections[1].split('\n') : []
+    const result: PortEntry[] = []
+    for (const [proto, lines] of [['TCP', tcpLines], ['UDP', udpLines]] as [string, string[]][]) {
+      for (const line of lines) {
+        // ss with -p: LISTEN  0  128  0.0.0.0:80  0.0.0.0:*  users:(("nginx",pid=123,fd=6))
+        const ssM = line.match(/(?:\S+\s+){1,3}(\S+):(\d+)\s+\S+.*users:\(\("([^"]*)"/)
+        if (ssM) { result.push({ addr: ssM[1], port: ssM[2], proto, process: ssM[3] }); continue }
+        // ss without -p: LISTEN  0  4096  0.0.0.0:80  0.0.0.0:*
+        const ssSimple = line.match(/(?:LISTEN|UNCONN)\s+\S+\s+\S+\s+\[?([^\]]+):(\d+)\]?\s+/)
+        if (ssSimple) { result.push({ addr: ssSimple[1], port: ssSimple[2], proto, process: '' }); continue }
+        // Netstat format: tcp  0  0  0.0.0.0:80  0.0.0.0:*  LISTEN  nginx/123
+        const nm = line.match(/\S+\s+\S+\s+\S+\s+(\S+):(\d+)\s+\S+\s+\S+\s*(.*)/)
+        if (nm) { result.push({ addr: nm[1], port: nm[2], proto, process: nm[3] || '' }) }
+      }
+    }
+    return result
+  }
+  const parsedPorts = parsePorts(portsRaw)
+  function portsForAddr(ifaceAddr: string): string[] {
+    if (!parsedPorts.length) return []
+    const matches = parsedPorts.filter((p) => {
+      if (p.addr === '0.0.0.0' || p.addr === '*' || p.addr === '::' || p.addr === '[::]') return true
+      return p.addr === ifaceAddr
+    })
+    return matches.map((p) => `${p.port}/${p.proto}${p.process ? ' (' + p.process + ')' : ''}`)
+  }
 
   function ConfigRow({ label, configKey, hint }: { label: string; configKey: string; hint?: string }) {
     return (
@@ -162,6 +219,7 @@ export default function LXDInstance() {
     { key: 'logs', label: 'Logs' },
     { key: 'processes', label: 'Processes' },
     { key: 'graphs', label: 'Graphs' },
+    { key: 'console', label: 'Console' },
   ]
 
   const CONFIG_TABS: { key: ConfigTab; label: string }[] = [
@@ -219,7 +277,7 @@ export default function LXDInstance() {
           </button>
           <button
             onClick={async () => {
-              if (!confirm(`Delete instance ${name}? This cannot be undone.`)) return
+              if (!(await confirm(`Delete instance ${name}? This cannot be undone.`))) return
               setBusy('remove')
               try { await api.lxd.action(name, 'remove'); navigate('/lxd') }
               catch (e: any) { setError(e.message); setBusy('') }
@@ -259,12 +317,15 @@ export default function LXDInstance() {
             </div>
             <div className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-xs uppercase tracking-wide text-gray-500">Uptime</div>
-              <div className="mt-1 text-lg font-semibold text-gray-900">{fmtUptime(state?.pid ? 0 : 0)}</div>
+              <div className="mt-1 text-lg font-semibold text-gray-900">{fmtUptime(uptime)}</div>
             </div>
             <div className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-xs uppercase tracking-wide text-gray-500">CPU</div>
-              <div className="mt-1 text-lg font-semibold text-gray-900">
-                {state?.cpu ? fmtCPUTime(state.cpu.usage) : '--'}
+              <div className="mt-1 flex items-center gap-2">
+                <div className="h-2 w-24 overflow-hidden rounded bg-gray-200">
+                  <div className="h-full rounded bg-blue-500" style={{ width: `${Math.min(100, cpuPct)}%` }} />
+                </div>
+                <span className="text-sm font-semibold text-gray-900">{cpuPct.toFixed(1)}%</span>
               </div>
               <div className="text-xs text-gray-500">{cfg['limits.cpu'] || '1'} core(s)</div>
             </div>
@@ -280,6 +341,43 @@ export default function LXDInstance() {
             </div>
           </div>
 
+          {/* Tags */}
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="mb-2 text-sm font-medium text-gray-700">Tags</div>
+            <div className="flex flex-wrap items-center gap-1">
+              {(inst.config?.['user.tags'] || '').split(',').filter(Boolean).map((t: string) => {
+                const trimmed = t.trim()
+                return (
+                  <span key={trimmed} className="inline-flex items-center gap-1 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                    {trimmed}
+                    <button
+                      onClick={async () => {
+                        const current = (inst.config?.['user.tags'] || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+                        const updated = current.filter((s: string) => s !== trimmed)
+                        setTabBusy('tags')
+                        try { await api.lxd.update(name, { tags: updated }); await load() }
+                        catch (e: any) { setError(e.message) }
+                        finally { setTabBusy('') }
+                      }}
+                      className="ml-0.5 rounded-full bg-blue-200 px-1 text-[10px] leading-none text-blue-600 hover:bg-blue-300"
+                    >
+                      &times;
+                    </button>
+                  </span>
+                )
+              })}
+              {tagInput === null ? (
+                <button onClick={() => setTagInput(inst.config?.['user.tags'] || '')} className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-200">+ Add tag</button>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <input value={tagInput} onChange={e => setTagInput(e.target.value)} placeholder="tag1, tag2, ..." className="w-48 rounded border border-gray-300 px-2 py-0.5 text-xs" autoFocus />
+                  <button disabled={!!tabBusy} onClick={async () => { const tags = tagInput.split(',').map((s: string) => s.trim()).filter(Boolean); setTabBusy('tags'); try { await api.lxd.update(name, { tags }); await load() } catch (e: any) { setError(e.message) } finally { setTabBusy(''); setTagInput(null) } }} className={btnAction('bg-green-100 text-green-700')}>{tabBusy === 'tags' ? '…' : 'Save'}</button>
+                  <button onClick={() => setTagInput(null)} className={btnAction('bg-gray-100 text-gray-700')}>Cancel</button>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Interfaces */}
           {state?.network && (
             <div className="rounded-lg border border-gray-200 bg-white">
@@ -290,6 +388,7 @@ export default function LXDInstance() {
                     <th className="px-4 py-2">Interface</th>
                     <th className="px-4 py-2">IPv4</th>
                     <th className="px-4 py-2">IPv6</th>
+                    <th className="px-4 py-2">Ports</th>
                     <th className="px-4 py-2">RX</th>
                     <th className="px-4 py-2">TX</th>
                   </tr>
@@ -298,11 +397,23 @@ export default function LXDInstance() {
                   {Object.entries(state.network).map(([iface, net]: [string, any]) => {
                     const ipv4 = net.addresses?.find((a: any) => a.family === 'inet')?.address || '--'
                     const ipv6 = net.addresses?.find((a: any) => a.family === 'inet6')?.address || '--'
+                    const ifPorts = portsForAddr(ipv4)
                     return (
                       <tr key={iface} className="bg-white">
                         <td className="px-4 py-2 font-medium text-gray-900">{iface}</td>
                         <td className="px-4 py-2 text-gray-600">{ipv4}</td>
                         <td className="px-4 py-2 text-gray-600">{ipv6}</td>
+                        <td className="px-4 py-2">
+                          {ifPorts.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {ifPorts.map((p, i) => (
+                                <span key={i} className="inline-block rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700">{p}</span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">--</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2 text-gray-600">{fmtBytes(net.counters?.bytes_received || 0)}</td>
                         <td className="px-4 py-2 text-gray-600">{fmtBytes(net.counters?.bytes_sent || 0)}</td>
                       </tr>
@@ -590,7 +701,7 @@ export default function LXDInstance() {
                     <div className="flex justify-end gap-1">
                       <button
                         onClick={async () => {
-                          if (confirm(`Restore snapshot "${snap.name}"?`)) {
+                          if (await confirm(`Restore snapshot "${snap.name}"?`)) {
                             try { await api.lxd.restoreSnapshot(name, snap.name); load() }
                             catch (e: any) { setError(e.message) }
                           }
@@ -601,7 +712,7 @@ export default function LXDInstance() {
                       </button>
                       <button
                         onClick={async () => {
-                          if (confirm(`Delete snapshot "${snap.name}"?`)) {
+                          if (await confirm(`Delete snapshot "${snap.name}"?`)) {
                             try { await api.lxd.deleteSnapshot(name, snap.name); loadSnapshots() }
                             catch (e: any) { setError(e.message) }
                           }
@@ -657,7 +768,7 @@ export default function LXDInstance() {
                     <div className="flex justify-end gap-1">
                       <button
                         onClick={async () => {
-                          if (confirm(`Restore from backup "${bk.name}"?`)) {
+                          if (await confirm(`Restore from backup "${bk.name}"?`)) {
                             try { await api.lxd.restoreBackup(name, bk.name); load() }
                             catch (e: any) { setError(e.message) }
                           }
@@ -668,7 +779,7 @@ export default function LXDInstance() {
                       </button>
                       <button
                         onClick={async () => {
-                          if (confirm(`Delete backup "${bk.name}"?`)) {
+                          if (await confirm(`Delete backup "${bk.name}"?`)) {
                             try { await api.lxd.deleteBackup(name, bk.name); loadBackups() }
                             catch (e: any) { setError(e.message) }
                           }
@@ -716,7 +827,7 @@ export default function LXDInstance() {
                       .then(r => r.text()).then(t => { setFilesContent(t); setFilesViewing(entry.name) })
                   }} className={btnAction('bg-blue-100 text-blue-700')}>View</button>}
                   <button onClick={async () => {
-                    if (!confirm(`Delete ${entry.name}?`)) return
+                    if (!(await confirm(`Delete ${entry.name}?`))) return
                     try { await api.lxd.deleteFile(name, filesPath === '/' ? `/${entry.name}` : `${filesPath}/${entry.name}`); loadFiles() }
                     catch (e: any) { setFilesError(e.message) }
                   }} className={btnAction('bg-red-100 text-red-700')}>Delete</button>
@@ -769,6 +880,16 @@ export default function LXDInstance() {
       {tab === 'graphs' && (
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <LiveGraphs name={name} />
+        </div>
+      )}
+
+      {/* === CONSOLE TAB === */}
+      {tab === 'console' && (
+        <div style={{ height: '500px', borderRadius: 8, overflow: 'hidden', border: '1px solid #e5e7eb' }}>
+          <TerminalView
+            wsPath={`/api/lxd/instances/${encodeURIComponent(name)}/exec`}
+            title={`LXD Console — ${name}`}
+          />
         </div>
       )}
 

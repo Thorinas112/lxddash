@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api/client'
+import { confirm } from '../components/ConfirmDialog'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'
 import TerminalView from '../components/TerminalView'
@@ -54,7 +55,22 @@ export default function DockerContainer() {
   // Auto-load logs on tab switch
   useEffect(() => {
     if (tab === 'logs') {
-      api.docker.logs(id, logsTail).then(setLogsText).catch(() => setLogsText('No logs available'))
+      // Try WebSocket streaming first, fall back to one-shot fetch.
+      const wsUrl = api.docker.logsStream(id)
+      let ws: WebSocket | null = null
+      try {
+        ws = new WebSocket(wsUrl)
+        ws.onmessage = (e) => {
+          setLogsText((prev) => prev + (typeof e.data === 'string' ? e.data : ''))
+        }
+        ws.onerror = () => {
+          // Fall back to one-shot fetch
+          api.docker.logs(id, logsTail).then(setLogsText).catch(() => setLogsText('No logs available'))
+        }
+      } catch {
+        api.docker.logs(id, logsTail).then(setLogsText).catch(() => setLogsText('No logs available'))
+      }
+      return () => { if (ws && ws.readyState <= 1) ws.close() }
     }
   }, [tab, id, logsTail])
 
@@ -90,7 +106,7 @@ export default function DockerContainer() {
   }
 
   async function remove() {
-    if (!confirm(`Delete container ${containerName}? This cannot be undone.`)) return
+    if (!(await confirm(`Delete container ${containerName}? This cannot be undone.`))) return
     setBusy('remove')
     try {
       await api.docker.action(id, 'remove')

@@ -24,6 +24,7 @@ import (
 	"lxddash/internal/services/proxmox"
 	"lxddash/internal/services/resmetrics"
 	"lxddash/internal/services/systemd"
+	"lxddash/internal/services/tags"
 	"lxddash/internal/services/updates"
 )
 
@@ -62,7 +63,7 @@ func main() {
 
 	ollamaSvc := ollama.New("")
 
-	activitySvc := activity.New(500)
+	activitySvc := activity.New(500, cfg.DataDir)
 
 	backupSvc := backup.New(lxdSvc, cfg.DataDir)
 
@@ -85,24 +86,27 @@ func main() {
 
 	forwardSvc := forward.New(cfg.DataDir)
 
+	tagsStore := tags.New(cfg.DataDir)
+
 	h := handlers.New(handlers.Deps{
-		Config:   cfg,
-		Auth:     authSvc,
-		Host:     hostSvc,
-		Docker:   dockerSvc,
-		LXD:      lxdSvc,
-		Libvirt:  libvirtSvc,
-		Proxmox:  proxmoxSvc,
-		Ollama:   ollamaSvc,
-		Activity: activitySvc,
-		Backup:   backupSvc,
-		Metrics:  metricsSvc,
-		Systemd:  systemdSvc,
-		Updates:  updatesSvc,
-		Notify:   notifySvc,
-		Alerts:   alertsSvc,
+		Config:     cfg,
+		Auth:       authSvc,
+		Host:       hostSvc,
+		Docker:     dockerSvc,
+		LXD:        lxdSvc,
+		Libvirt:    libvirtSvc,
+		Proxmox:    proxmoxSvc,
+		Ollama:     ollamaSvc,
+		Activity:   activitySvc,
+		Backup:     backupSvc,
+		Metrics:    metricsSvc,
+		Systemd:    systemdSvc,
+		Updates:    updatesSvc,
+		Notify:     notifySvc,
+		Alerts:     alertsSvc,
 		ResMetrics: resMetricsSvc,
-		Forward:  forwardSvc,
+		Forward:    forwardSvc,
+		Tags:       tagsStore,
 	})
 
 	// Notify on backup completion/failure.

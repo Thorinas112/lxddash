@@ -58,9 +58,11 @@ func (h *Handlers) VMCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	uuid, err := h.deps.Libvirt.CreateVM(r.Context(), req)
 	if err != nil {
+		h.logActivity("vm", "create", req.Name, "", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logActivity("vm", "create", req.Name, "VM created", nil)
 	writeJSON(w, http.StatusCreated, map[string]string{"uuid": uuid})
 }
 
@@ -142,12 +144,22 @@ func (h *Handlers) VM(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "libvirt service unavailable")
 		return
 	}
-	info, err := h.deps.Libvirt.Domain(r.Context(), r.PathValue("uuid"))
+	uuid := r.PathValue("uuid")
+	info, err := h.deps.Libvirt.Domain(r.Context(), uuid)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, info)
+	// Attach live stats (uptime/CPU/memory) so detail pages get everything
+	// in one call.
+	resp := struct {
+		libvirt.DomainInfo
+		Stats *libvirt.DomainStat `json:"stats,omitempty"`
+	}{DomainInfo: info}
+	if st, err := h.deps.Libvirt.Stat(r.Context(), uuid); err == nil {
+		resp.Stats = st
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handlers) VMStart(w http.ResponseWriter, r *http.Request)     { h.vmAction(w, r, "start") }
@@ -173,9 +185,11 @@ func (h *Handlers) vmAction(w http.ResponseWriter, r *http.Request, action strin
 		err = h.deps.Libvirt.ForceStop(r.Context(), uuid)
 	}
 	if err != nil {
+		h.logActivity("vm", action, uuid, "", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logActivity("vm", action, uuid, "VM "+action, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -185,9 +199,11 @@ func (h *Handlers) VMDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.deps.Libvirt.Delete(r.Context(), r.PathValue("uuid")); err != nil {
+		h.logActivity("vm", "delete", r.PathValue("uuid"), "", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logActivity("vm", "delete", r.PathValue("uuid"), "VM deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -334,6 +350,45 @@ var vncUpgrader = websocket.Upgrader{
 // consoles (LXD exec and VM serial console).
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// VMPorts discovers a VM's IPv4 address (libvirt DHCP lease) and scans it
+// for open TCP ports. Default scans a common-service port list (fast);
+// ?scan=full sweeps 1-65535 (can take ~30s).
+func (h *Handlers) VMPorts(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Libvirt == nil {
+		writeErr(w, http.StatusServiceUnavailable, "libvirt service unavailable")
+		return
+	}
+	uuid := r.PathValue("uuid")
+	name, err := h.deps.Libvirt.ConsoleName(r.Context(), uuid)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	ip, err := h.deps.Libvirt.IPAddress(r.Context(), uuid)
+	if err != nil || ip == "" {
+		writeErr(w, http.StatusNotFound,
+			fmt.Sprintf("no IP address found for %q (VM stopped or no DHCP lease?): %v", name, err))
+		return
+	}
+	start := time.Now()
+	var open []int
+	if r.URL.Query().Get("scan") == "full" {
+		open = libvirt.ScanRange(r.Context(), ip)
+	} else {
+		open = libvirt.ScanPorts(r.Context(), ip, libvirt.CommonScanPorts, 64, 400*time.Millisecond)
+	}
+	ports := make([]libvirt.PortInfo, 0, len(open))
+	for _, p := range open {
+		ports = append(ports, libvirt.PortInfo{Port: p, Service: libvirt.DescribePort(p)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ip":          ip,
+		"ports":       ports,
+		"scan":        r.URL.Query().Get("scan"),
+		"duration_ms": time.Since(start).Milliseconds(),
+	})
 }
 
 // VMVNC bridges the VM's VNC TCP port to a WebSocket so the browser can

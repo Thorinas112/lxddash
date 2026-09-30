@@ -32,18 +32,18 @@ func New() (*Service, error) {
 
 // ContainerStat is a live resource snapshot for one container.
 type ContainerStat struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	CPUUsage    uint64  `json:"cpu_usage"` // cumulative CPU time in ns
-	MemUsage    uint64  `json:"mem_usage"`
-	MemLimit    uint64  `json:"mem_limit"`
-	MemPercent  float64 `json:"mem_percent"`
-	NetRx       uint64  `json:"net_rx"`
-	NetTx       uint64  `json:"net_tx"`
-	Pids        uint64  `json:"pids"`
-	BlockRead   uint64  `json:"block_read"`
-	BlockWrite  uint64  `json:"block_write"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	CPUPercent float64 `json:"cpu_percent"`
+	CPUUsage   uint64  `json:"cpu_usage"` // cumulative CPU time in ns
+	MemUsage   uint64  `json:"mem_usage"`
+	MemLimit   uint64  `json:"mem_limit"`
+	MemPercent float64 `json:"mem_percent"`
+	NetRx      uint64  `json:"net_rx"`
+	NetTx      uint64  `json:"net_tx"`
+	Pids       uint64  `json:"pids"`
+	BlockRead  uint64  `json:"block_read"`
+	BlockWrite uint64  `json:"block_write"`
 }
 
 // Stats returns live CPU/memory/network usage for all running
@@ -176,6 +176,22 @@ func (s *Service) Logs(ctx context.Context, id, tail string) (io.ReadCloser, err
 	})
 }
 
+// TagsFromLabels extracts lxddash.tags from container labels.
+func TagsFromLabels(labels map[string]string) []string {
+	raw := labels["lxddash.tags"]
+	if raw == "" {
+		return nil
+	}
+	var tags []string
+	for _, t := range strings.Split(raw, ",") {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return tags
+}
+
 // Exec starts an interactive shell inside a running container.
 // It returns streams for stdin/stdout that can be bridged to a WebSocket.
 func (s *Service) Exec(ctx context.Context, id string, stdin io.Reader, stdout io.Writer) error {
@@ -281,12 +297,14 @@ func (s *Service) RemoveNetwork(ctx context.Context, id string) error {
 
 // CreateRequest is the JSON body for creating a container.
 type CreateRequest struct {
-	Name    string   `json:"name"`
-	Image   string   `json:"image"`
-	Cmd     []string `json:"cmd"`
-	Env     []string `json:"env"`
-	Ports   []string `json:"ports"`
-	Restart string   `json:"restart"`
+	Name    string            `json:"name"`
+	Image   string            `json:"image"`
+	Cmd     []string          `json:"cmd"`
+	Env     []string          `json:"env"`
+	Ports   []string          `json:"ports"`
+	Restart string            `json:"restart"`
+	Tags    []string          `json:"tags"`
+	Labels  map[string]string `json:"labels"`
 }
 
 // CreateContainer creates a container (without starting it).
@@ -317,6 +335,17 @@ func (s *Service) CreateContainer(ctx context.Context, req CreateRequest) (strin
 		Cmd:          req.Cmd,
 		Env:          req.Env,
 		ExposedPorts: exposed,
+	}
+	// Merge user labels with lxddash.tags.
+	labels := map[string]string{}
+	for k, v := range req.Labels {
+		labels[k] = v
+	}
+	if len(req.Tags) > 0 {
+		labels["lxddash.tags"] = strings.Join(req.Tags, ",")
+	}
+	if len(labels) > 0 {
+		cfg.Labels = labels
 	}
 	hostCfg := &container.HostConfig{
 		PortBindings:  bindings,

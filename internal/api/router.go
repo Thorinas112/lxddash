@@ -22,6 +22,7 @@ func NewRouter(h *handlers.Handlers, authSvc *auth.Service, cfg *config.Config) 
 	mux.HandleFunc("GET /api/auth/status", h.AuthStatus)
 	mux.HandleFunc("POST /api/auth/setup", h.Setup)
 	mux.HandleFunc("POST /api/auth/login", h.Login)
+mux.HandleFunc("POST /api/auth/reset-password", h.ResetPassword)
 	mux.HandleFunc("POST /api/auth/password", h.ChangePassword)
 	mux.HandleFunc("GET /api/auth/tokens", h.AuthTokens)
 	mux.HandleFunc("POST /api/auth/tokens", h.AuthCreateToken)
@@ -58,6 +59,8 @@ func NewRouter(h *handlers.Handlers, authSvc *auth.Service, cfg *config.Config) 
 	mux.HandleFunc("DELETE /api/docker/containers/{id}", h.DockerRemoveContainer)
 	mux.HandleFunc("GET /api/docker/containers/{id}/logs", h.DockerContainerLogs)
 	mux.HandleFunc("GET /api/docker/containers/{id}/exec", h.DockerExec)
+	mux.HandleFunc("GET /api/docker/containers/{id}/logs/stream", h.DockerLogsStream)
+	mux.HandleFunc("POST /api/docker/bulk", h.DockerBulkAction)
 	mux.HandleFunc("GET /api/docker/images", h.DockerImages)
 	mux.HandleFunc("POST /api/docker/images/pull", h.DockerPullImage)
 	mux.HandleFunc("DELETE /api/docker/images/{id}", h.DockerRemoveImage)
@@ -70,6 +73,7 @@ func NewRouter(h *handlers.Handlers, authSvc *auth.Service, cfg *config.Config) 
 	mux.HandleFunc("POST /api/docker/compose/down", h.DockerComposeDown)
 	mux.HandleFunc("POST /api/docker/compose/pull", h.DockerComposePull)
 	mux.HandleFunc("POST /api/docker/compose/ps", h.DockerComposePS)
+	mux.HandleFunc("POST /api/docker/compose/deploy", h.DockerComposeDeploy)
 
 	// LXD
 	mux.HandleFunc("GET /api/lxd/instances", h.LXDInstances)
@@ -80,18 +84,26 @@ func NewRouter(h *handlers.Handlers, authSvc *auth.Service, cfg *config.Config) 
 	mux.HandleFunc("POST /api/lxd/instances/{name}/stop", h.LXDStopInstance)
 	mux.HandleFunc("POST /api/lxd/instances/{name}/restart", h.LXDRestartInstance)
 	mux.HandleFunc("DELETE /api/lxd/instances/{name}", h.LXDDeleteInstance)
+	mux.HandleFunc("POST /api/lxd/instances/{name}/clone", h.LXDCloneInstance)
+	mux.HandleFunc("POST /api/lxd/instances/{name}/resize", h.LXDResizeLimits)
+	mux.HandleFunc("POST /api/lxd/bulk", h.LXDBulkAction)
 	mux.HandleFunc("GET /api/lxd/instances/{name}/snapshots", h.LXDSnapshots)
 	mux.HandleFunc("POST /api/lxd/instances/{name}/snapshots", h.LXDCreateSnapshot)
 	mux.HandleFunc("POST /api/lxd/instances/{name}/snapshots/{snapshot}/restore", h.LXDRestoreSnapshot)
 	mux.HandleFunc("DELETE /api/lxd/instances/{name}/snapshots/{snapshot}", h.LXDDeleteSnapshot)
+	mux.HandleFunc("GET /api/lxd/instances/{name}/snapshots/{snapshot}/export", h.LXDExportSnapshot)
 	mux.HandleFunc("GET /api/lxd/instances/{name}/backups", h.LXDBackups)
 	mux.HandleFunc("POST /api/lxd/instances/{name}/backups", h.LXDCreateBackup)
 	mux.HandleFunc("POST /api/lxd/instances/{name}/backups/{backup}/restore", h.LXDRestoreBackup)
+	mux.HandleFunc("GET /api/lxd/instances/{name}/backups/{backup}/download", h.LXDDownloadBackup)
 	mux.HandleFunc("DELETE /api/lxd/instances/{name}/backups/{backup}", h.LXDDeleteBackup)
+	mux.HandleFunc("GET /api/lxd/instances/{name}/backups/{backup}/verify", h.LXDVerifyBackup)
+	mux.HandleFunc("GET /api/lxd/instances/{name}/backups/{backup}/proxmox", h.LXDExportProxmox)
 	mux.HandleFunc("GET /api/lxd/instances/{name}/exec", h.LXDExec)
 	mux.HandleFunc("GET /api/lxd/instances/{name}/updates", h.LXDInstanceUpdates)
 	mux.HandleFunc("GET /api/lxd/instances/{name}/logs", h.LXDInstanceLogs)
 	mux.HandleFunc("GET /api/lxd/instances/{name}/processes", h.LXDInstanceProcesses)
+	mux.HandleFunc("GET /api/lxd/instances/{name}/ports", h.LXDInstancePorts)
 	mux.HandleFunc("GET /api/lxd/instances/{name}/files", h.LXDFiles)
 	mux.HandleFunc("POST /api/lxd/instances/{name}/files", h.LXDFileUpload)
 	mux.HandleFunc("DELETE /api/lxd/instances/{name}/files", h.LXDFileDelete)
@@ -139,6 +151,7 @@ func NewRouter(h *handlers.Handlers, authSvc *auth.Service, cfg *config.Config) 
 	mux.HandleFunc("DELETE /api/vms/{uuid}", h.VMDelete)
 	mux.HandleFunc("GET /api/vms/{uuid}/vnc", h.VMVNC)
 	mux.HandleFunc("GET /api/vms/{uuid}/console", h.VMConsole)
+	mux.HandleFunc("GET /api/vms/{uuid}/ports", h.VMPorts)
 
 	// Proxmox migration
 	mux.HandleFunc("GET /api/proxmox/backups", h.ProxmoxBackups)
@@ -162,6 +175,10 @@ func NewRouter(h *handlers.Handlers, authSvc *auth.Service, cfg *config.Config) 
 	// Alerts (thresholds -> webhook)
 	mux.HandleFunc("GET /api/alerts", h.AlertsGet)
 	mux.HandleFunc("POST /api/alerts", h.AlertsSet)
+
+	// Tags (shared for Docker containers and VMs)
+	mux.HandleFunc("GET /api/tags/{id}", h.GetTags)
+	mux.HandleFunc("PUT /api/tags/{id}", h.SetTags)
 
 	// Port forwards
 	mux.HandleFunc("GET /api/forwards", h.ForwardsList)
@@ -218,6 +235,9 @@ func spaHandler(dir string) http.Handler {
 			return
 		}
 		// Otherwise serve index.html (SPA fallback).
+		// Add no-cache headers so the browser always fetches the latest HTML
+		// (which references the content-hashed JS/CSS bundles).
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	})
 }
@@ -227,7 +247,7 @@ func spaHandler(dir string) http.Handler {
 func authMiddleware(next http.Handler, authSvc *auth.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if path == "/api/auth/login" || path == "/api/auth/status" || path == "/api/auth/setup" || !strings.HasPrefix(path, "/api/") {
+		if path == "/api/auth/login" || path == "/api/auth/status" || path == "/api/auth/setup" || path == "/api/auth/reset-password" || !strings.HasPrefix(path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}

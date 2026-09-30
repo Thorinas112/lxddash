@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { confirm } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 import Spinner from '../components/Spinner'
 import Wizard from '../components/Wizard'
@@ -67,7 +68,7 @@ export default function Images() {
   }
 
   async function removeISO(name: string) {
-    if (!window.confirm(`Delete ISO ${name}?`)) return
+    if (!(await confirm(`Delete ISO ${name}?`))) return
     setBusy('iso:' + name)
     setError('')
     try {
@@ -81,7 +82,7 @@ export default function Images() {
   }
 
   async function remove(img: Image) {
-    if (!window.confirm(`Delete image ${img.aliases?.[0]?.name || img.fingerprint.slice(0, 12)}?`)) return
+    if (!(await confirm(`Delete image ${img.aliases?.[0]?.name || img.fingerprint.slice(0, 12)}?`))) return
     setBusy(img.fingerprint)
     setError('')
     try {

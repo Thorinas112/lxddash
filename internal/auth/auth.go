@@ -210,6 +210,7 @@ func (s *Service) ChangePassword(oldPassword, newPassword string) error {
 }
 
 // Login verifies credentials and returns a signed JWT valid for 24h.
+// Login authenticates the user and returns a JWT.
 func (s *Service) Login(user, password string) (string, error) {
 	if s.setupRequired {
 		return "", ErrSetupRequired
@@ -225,6 +226,17 @@ func (s *Service) Login(user, password string) (string, error) {
 		"exp": time.Now().Add(24 * time.Hour).Unix(),
 	})
 	return token.SignedString(s.secret)
+}
+
+// ResetPassword force-sets a new admin password (for recovery).
+func (s *Service) ResetPassword(newPassword string) error {
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	s.hash = hash
+	s.setupRequired = false
+	return s.persist()
 }
 
 // Validate checks a bearer token and returns the subject (username).

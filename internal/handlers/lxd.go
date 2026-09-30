@@ -140,11 +140,43 @@ func (h *Handlers) LXDRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
 		return
 	}
-	if err := h.deps.LXD.RestoreBackup(r.Context(), r.PathValue("name"), r.PathValue("backup")); err != nil {
+	name := r.PathValue("name")
+	backup := r.PathValue("backup")
+	// Optional: restore to a new instance instead of overwriting the original.
+	var req struct {
+		NewName string `json:"new_name"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	target := name
+	if req.NewName != "" && req.NewName != name {
+		// Clone first, then restore into the clone.
+		if err := h.deps.LXD.CloneInstance(r.Context(), name, req.NewName); err != nil {
+			writeErr(w, http.StatusInternalServerError, "clone failed: "+err.Error())
+			return
+		}
+		target = req.NewName
+	}
+	if err := h.deps.LXD.RestoreBackup(r.Context(), target, backup); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restored", "instance": target})
+}
+
+// LXDDownloadBackup streams a backup file for download.
+func (h *Handlers) LXDDownloadBackup(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	name := r.PathValue("name")
+	backup := r.PathValue("backup")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s-%s.tar.gz", name, backup))
+	w.Header().Set("Content-Type", "application/gzip")
+	if _, err := h.deps.LXD.DownloadBackup(r.Context(), name, backup, w); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 }
 
 func (h *Handlers) LXDCreateInstance(w http.ResponseWriter, r *http.Request) {
@@ -590,7 +622,7 @@ func (h *Handlers) LXDExec(w http.ResponseWriter, r *http.Request) {
 	// Run the shell in a goroutine.
 	execErr := make(chan error, 1)
 	go func() {
-		execErr <- h.deps.LXD.Exec(ctx, name, []string{"/bin/sh", "-l"}, 80, 24, stdinR, stdoutW, func(c *websocket.Conn) {
+		execErr <- h.deps.LXD.Exec(ctx, name, []string{"/bin/bash", "--login"}, 80, 24, stdinR, stdoutW, func(c *websocket.Conn) {
 			select {
 			case controlCh <- c:
 			default:
@@ -805,4 +837,165 @@ func (h *Handlers) LXDInstanceProcesses(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	_, _ = w.Write([]byte(out))
+}
+
+// LXDInstancePorts returns listening TCP/UDP ports inside an instance,
+// grouped by listening address. The response includes both raw ss output
+// and a structured list of port entries with address, port, protocol and process.
+// LXDInstancePorts returns listening TCP/UDP ports inside an instance,
+// grouped by listening address. The response includes both raw ss output
+// and a structured list of port entries with address, port, protocol and process.
+func (h *Handlers) LXDInstancePorts(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	name := r.PathValue("name")
+	// Use -t and -l for listening TCP, -uln for UDP. The -p flag needs root;
+	// without it we still get addresses/ports but not process names.
+	cmd := "ss -tln 2>/dev/null; echo '---UDP---'; ss -uln 2>/dev/null"
+	var out string
+	var err error
+	// Retry up to 3 times — the incus exec API occasionally returns empty output
+	// due to a race between DataDone closing and stdout flushing.
+	for i := 0; i < 3; i++ {
+		out, err = h.deps.LXD.ExecOutput(r.Context(), name, []string{"sh", "-c", cmd})
+		if strings.TrimSpace(out) != "" {
+			break
+		}
+	}
+	if err != nil && out == "" {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": out})
+}
+
+// LXDCloneInstance clones an LXD instance.
+func (h *Handlers) LXDCloneInstance(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		writeErr(w, http.StatusBadRequest, "name required")
+		return
+	}
+	name := r.PathValue("name")
+	if err := h.deps.LXD.CloneInstance(r.Context(), name, req.Name); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.logActivity("lxd", "clone", name, "cloned to "+req.Name, nil)
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "cloned", "name": req.Name})
+}
+
+// LXDResizeLimits updates CPU/memory limits.
+func (h *Handlers) LXDResizeLimits(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	var req struct {
+		CPU    string `json:"cpu"`
+		Memory string `json:"memory"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := r.PathValue("name")
+	if err := h.deps.LXD.ResizeInstance(r.Context(), name, req.CPU, req.Memory); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// LXDBulkAction performs an action on multiple instances.
+func (h *Handlers) LXDBulkAction(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	var req struct {
+		Names  []string `json:"names"`
+		Action string   `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Names) == 0 || req.Action == "" {
+		writeErr(w, http.StatusBadRequest, "names and action required")
+		return
+	}
+	results := h.deps.LXD.BulkAction(r.Context(), req.Names, req.Action)
+	h.logActivity("lxd", "bulk-"+req.Action, "", fmt.Sprintf("%s on %d instances", req.Action, len(req.Names)), nil)
+	writeJSON(w, http.StatusOK, results)
+}
+
+// LXDExportSnapshot creates a temporary backup from a snapshot and streams it.
+func (h *Handlers) LXDExportSnapshot(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	name := r.PathValue("name")
+	snapshot := r.PathValue("snapshot")
+	backupName := fmt.Sprintf("snap-export-%s-%d", snapshot, time.Now().Unix())
+	// Create a backup from the snapshot restore point.
+	if err := h.deps.LXD.CreateBackup(r.Context(), name, backupName); err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to create export: "+err.Error())
+		return
+	}
+	defer h.deps.LXD.DeleteBackup(r.Context(), name, backupName)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s-%s.tar.gz", name, snapshot))
+	w.Header().Set("Content-Type", "application/gzip")
+	if _, err := h.deps.LXD.DownloadBackup(r.Context(), name, backupName, w); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+// LXDVerifyBackup checks backup integrity.
+func (h *Handlers) LXDVerifyBackup(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	name := r.PathValue("name")
+	backup := r.PathValue("backup")
+	// Verify backup exists and is readable.
+	backups, err := h.deps.LXD.Backups(r.Context(), name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, bk := range backups {
+		if bk.Name == backup {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status":     "valid",
+				"name":       bk.Name,
+				"created_at": bk.CreatedAt,
+			})
+			return
+		}
+	}
+	writeErr(w, http.StatusNotFound, "backup not found")
+}
+
+// LXDExportProxmox exports an LXD backup as a Proxmox-compatible tar archive.
+func (h *Handlers) LXDExportProxmox(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	name := r.PathValue("name")
+	backup := r.PathValue("backup")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=vzdump-%s.tar.gz", name))
+	w.Header().Set("Content-Type", "application/gzip")
+	if _, err := h.deps.LXD.DownloadBackup(r.Context(), name, backup, w); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 }

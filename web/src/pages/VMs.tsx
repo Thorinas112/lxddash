@@ -1,6 +1,7 @@
 ﻿import { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
+import { confirm, promptInline } from '../components/ConfirmDialog'
 import AssistModal from '../components/AssistModal'
 import Badge from '../components/Badge'
 import LiveGraphsModal from '../components/LiveGraphsModal'
@@ -58,6 +59,8 @@ export default function VMs() {
   const [snapshotsFor, setSnapshotsFor] = useState<VM | null>(null)
   const [resizeFor, setResizeFor] = useState<VM | null>(null)
   const [graphsFor, setGraphsFor] = useState<string | null>(null)
+  const [portsFor, setPortsFor] = useState<VM | null>(null)
+  const [vmTags, setVmTags] = useState<Record<string, string[]>>({})
   const prevCpu = useRef<Record<string, { usage: number; t: number; cpus: number }>>({})
   const navigate = useNavigate()
 
@@ -67,6 +70,15 @@ export default function VMs() {
     } catch (e: any) {
       setError(e.message)
     }
+    // Load tags for all VMs.
+    try {
+      const list = await api.vms.list()
+      const tagMap: Record<string, string[]> = {}
+      await Promise.all(list.map(async (vm: any) => {
+        try { tagMap[vm.uuid] = await api.tags.get(vm.uuid) } catch { tagMap[vm.uuid] = [] }
+      }))
+      setVmTags(tagMap)
+    } catch { /* ignore */ }
   }, [])
 
   // Poll live VM stats every 3s.
@@ -141,6 +153,7 @@ export default function VMs() {
               <th className="px-4 py-3">Memory</th>
               <th className="px-4 py-3">VNC</th>
               <th className="px-4 py-3">Autostart</th>
+              <th className="px-4 py-3">Tags</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
@@ -224,6 +237,23 @@ export default function VMs() {
                     {v.autostart ? 'On' : 'Off'}
                   </button>
                 </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1">
+                    {(vmTags[v.uuid] || []).map((t) => (
+                      <span key={t} className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">{t}</span>
+                    ))}
+                    <button
+                      onClick={async () => {
+                        const input = await promptInline('Tags (comma-separated):')
+                        if (input === null) return
+                        const tags = input.split(',').map(s => s.trim()).filter(Boolean)
+                        await api.tags.set(v.uuid, tags)
+                        setVmTags(prev => ({ ...prev, [v.uuid]: tags }))
+                      }}
+                      className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 hover:bg-gray-200"
+                    >+</button>
+                  </div>
+                </td>
                 <td className="px-4 py-3 text-right">
                   {busy === v.uuid ? (
                     <Spinner />
@@ -276,6 +306,12 @@ export default function VMs() {
                         className={btnAction('bg-pink-100 text-pink-700')}
                       >
                         Resize
+                      </button>
+                      <button
+                        onClick={() => setPortsFor(v)}
+                        className={btnAction('bg-cyan-100 text-cyan-700')}
+                      >
+                        Ports
                       </button>
                       <button
                         onClick={() => act(v.uuid, 'remove')}
@@ -349,6 +385,12 @@ export default function VMs() {
             setResizeFor(null)
             load()
           }}
+        />
+      )}
+      {portsFor && (
+        <PortsModal
+          vm={portsFor}
+          onClose={() => setPortsFor(null)}
         />
       )}
       {graphsFor && (
@@ -661,7 +703,7 @@ function SnapshotsModal({
   }
 
   async function revert(s: Snapshot) {
-    if (!window.confirm(`Revert ${vm.name} to snapshot "${s.name}"? The VM will be restored to that state.`)) return
+    if (!(await confirm(`Revert ${vm.name} to snapshot "${s.name}"? The VM will be restored to that state.`))) return
     setBusy(s.name)
     setError('')
     try {
@@ -676,7 +718,7 @@ function SnapshotsModal({
   }
 
   async function remove(s: Snapshot) {
-    if (!window.confirm(`Delete snapshot "${s.name}"?`)) return
+    if (!(await confirm(`Delete snapshot "${s.name}"?`))) return
     setBusy(s.name)
     setError('')
     try {
@@ -827,6 +869,187 @@ function ResizeModal({
           <button onClick={submit} disabled={busy} className={btnPrimary}>
             {busy ? 'Applying…' : 'Apply'}
           </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// PortsModal discovers the VM's IP + open TCP ports and offers one-click
+// port forwards to localhost (VMs on NAT networks are unreachable directly
+// from a PC, so a forward proxies host:port to the VM).
+function PortsModal({ vm, onClose }: { vm: VM; onClose: () => void }) {
+  const [ip, setIp] = useState('')
+  const [ports, setPorts] = useState<{ port: number; service?: string }[]>([])
+  const [fwds, setFwds] = useState<any[]>([])
+  const [scanning, setScanning] = useState(true)
+  const [fullScan, setFullScan] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busyPort, setBusyPort] = useState(0)
+
+  const loadFwds = useCallback(async (vmIp: string) => {
+    if (!vmIp) return
+    try {
+      const all = await api.forwards.list()
+      setFwds(all.filter((f: any) => typeof f.target === 'string' && f.target.startsWith(vmIp + ':')))
+    } catch { /* ignore */ }
+  }, [])
+
+  async function scan(full: boolean) {
+    setScanning(true)
+    setFullScan(full)
+    setError('')
+    setNotice('')
+    try {
+      const res = await api.vms.ports(vm.uuid, full)
+      setIp(res.ip)
+      setPorts(res.ports || [])
+      await loadFwds(res.ip)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  useEffect(() => { scan(false) }, [vm.uuid]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function forward(p: number) {
+    setBusyPort(p)
+    setError('')
+    setNotice('')
+    try {
+      await api.forwards.add({ name: `${vm.name}:${p}`, port: p, target: `${ip}:${p}` })
+      setNotice(`Forwarded — open http://localhost:${p} (proxied to ${ip}:${p})`)
+      await loadFwds(ip)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusyPort(0)
+    }
+  }
+
+  async function removeFwd(id: string) {
+    setBusyPort(-1)
+    try {
+      await api.forwards.remove(id)
+      await loadFwds(ip)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusyPort(0)
+    }
+  }
+
+  return (
+    <Modal title={`Ports — ${vm.name}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between text-sm">
+          <div className="text-gray-600">
+            IP:{' '}
+            {ip ? (
+              <span className="font-mono font-medium text-gray-900">{ip}</span>
+            ) : (
+              <span className="text-gray-400">—</span>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => scan(false)} disabled={scanning} className={btnAction('bg-blue-100 text-blue-700')}>
+              Scan ports
+            </button>
+            <button onClick={() => scan(true)} disabled={scanning} className={btnAction('bg-indigo-100 text-indigo-700')}>
+              Full scan
+            </button>
+          </div>
+        </div>
+
+        {scanning && (
+          <div className="flex items-center gap-2 text-sm text-gray-500">
+            <Spinner />
+            {fullScan ? 'Full scan running — this can take ~30s…' : 'Scanning common service ports…'}
+          </div>
+        )}
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>
+        )}
+        {notice && (
+          <div className="rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">{notice}</div>
+        )}
+
+        {!scanning && ip && ports.length === 0 && !error && (
+          <div className="text-sm text-gray-500">
+            No open TCP ports found{fullScan ? '' : ' in the common list — try a full scan'}.
+          </div>
+        )}
+
+        {ports.length > 0 && (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-gray-500">
+                <th className="py-2 pr-3">Port</th>
+                <th className="py-2 pr-3">Service</th>
+                <th className="py-2 text-right">Forward</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {ports.map((p) => {
+                const fwd = fwds.find((f: any) => f.target === `${ip}:${p.port}`)
+                return (
+                  <tr key={p.port}>
+                    <td className="py-1.5 pr-3 font-mono text-gray-900">:{p.port}</td>
+                    <td className="py-1.5 pr-3 text-gray-600">{p.service || '—'}</td>
+                    <td className="py-1.5 text-right">
+                      {fwd ? (
+                        <span className="inline-flex items-center gap-2">
+                          <a
+                            href={`http://localhost:${fwd.port}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm font-medium text-blue-600 hover:underline"
+                          >
+                            localhost:{fwd.port}
+                          </a>
+                          <button onClick={() => removeFwd(fwd.id)} className={btnAction('bg-red-100 text-red-700')}>
+                            Remove
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => forward(p.port)}
+                          disabled={busyPort !== 0}
+                          className={btnAction('bg-green-100 text-green-700')}
+                        >
+                          {busyPort === p.port ? '…' : 'Forward'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+
+        {fwds.length > 0 && (
+          <div className="rounded border border-gray-200 bg-panel2 p-3 text-xs text-gray-600">
+            <div className="mb-1 font-medium text-gray-700">Active forwards to this VM</div>
+            {fwds.map((f: any) => (
+              <div key={f.id} className="flex items-center justify-between py-0.5">
+                <span className="font-mono">:{f.port} → {f.target}</span>
+                <button onClick={() => removeFwd(f.id)} className="text-red-600 hover:underline">remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="text-xs text-gray-400">
+          VMs on NAT networks (libvirt default) are not reachable directly from your PC — a forward
+          opens the port on this host and proxies it to the VM.
+        </p>
+
+        <div className="flex justify-end pt-1">
+          <button onClick={onClose} className={btnGhost}>Close</button>
         </div>
       </div>
     </Modal>

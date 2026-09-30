@@ -1,6 +1,7 @@
 ﻿import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import Badge from '../components/Badge'
+import { confirm } from '../components/ConfirmDialog'
 import Spinner from '../components/Spinner'
 import { btnAction, btnPrimary } from '../components/ui'
 
@@ -39,6 +40,7 @@ export default function Proxmox() {
   const [error, setError] = useState('')
   const [importing, setImporting] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [uploadPct, setUploadPct] = useState(0)
   const [dragOver, setDragOver] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -71,7 +73,7 @@ export default function Proxmox() {
   }, [tasks, loadTasks])
 
   async function doImport(b: Backup) {
-    if (!window.confirm(`Import ${b.filename}?\n\nLXC backups are imported into LXD, QEMU backups into libvirt.`)) return
+    if (!(await confirm(`Import ${b.filename}?\n\nLXC backups are imported into LXD, QEMU backups into libvirt.`))) return
     setImporting(b.path)
     setError('')
     try {
@@ -86,20 +88,22 @@ export default function Proxmox() {
 
   async function doUpload(file: File) {
     setUploading(true)
+    setUploadPct(0)
     setError('')
     try {
-      await api.proxmox.upload(file)
+      await api.proxmox.upload(file, (pct) => setUploadPct(pct))
       await loadBackups()
     } catch (e: any) {
       setError(e.message)
     } finally {
       setUploading(false)
+      setUploadPct(0)
       if (fileRef.current) fileRef.current.value = ''
     }
   }
 
   async function doDelete(b: Backup) {
-    if (!window.confirm(`Delete ${b.filename}?`)) return
+    if (!(await confirm(`Delete ${b.filename}?`))) return
     setError('')
     try {
       await api.proxmox.remove(b.filename)
@@ -135,8 +139,18 @@ export default function Proxmox() {
             disabled={uploading}
             className={btnPrimary}
           >
-            {uploading ? 'Uploading…' : 'Upload backup'}
+            {uploading ? `Uploading… ${uploadPct}%` : 'Upload backup'}
           </button>
+          {uploading && (
+            <div className="flex-1">
+              <div className="h-2 w-full overflow-hidden rounded bg-gray-200">
+                <div
+                  className="h-full rounded bg-blue-500 transition-all duration-300"
+                  style={{ width: `${uploadPct}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

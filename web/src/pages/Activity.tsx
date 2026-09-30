@@ -19,6 +19,10 @@ const catColors: Record<string, string> = {
   proxmox: 'bg-orange-100 text-orange-700',
   llm: 'bg-pink-100 text-pink-700',
   system: 'bg-gray-100 text-gray-600',
+  forward: 'bg-teal-100 text-teal-700',
+  host: 'bg-red-100 text-red-700',
+  systemd: 'bg-indigo-100 text-indigo-700',
+  updates: 'bg-amber-100 text-amber-700',
 }
 
 export default function Activity() {
@@ -56,6 +60,10 @@ export default function Activity() {
           <option value="proxmox">Proxmox</option>
           <option value="llm">LLM</option>
           <option value="system">System</option>
+          <option value="forward">Port forwards</option>
+          <option value="host">Host</option>
+          <option value="systemd">Systemd</option>
+          <option value="updates">Updates</option>
         </select>
       </div>
 

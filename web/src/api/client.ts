@@ -82,6 +82,12 @@ export const api = {
     upgrade: () => request<any>('/updates/upgrade', { method: 'POST' }),
   },
 
+  tags: {
+    get: (id: string) => request<string[]>(`/tags/${encodeURIComponent(id)}`),
+    set: (id: string, tags: string[]) =>
+      request<any>(`/tags/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ tags }) }),
+  },
+
   notify: {
     get: () => request<{ url: string }>('/notify'),
     set: (url: string) => request<any>('/notify', { method: 'POST', body: JSON.stringify({ url }) }),
@@ -139,6 +145,11 @@ export const api = {
         ? request<any>(`/docker/containers/${id}`, { method: 'DELETE' })
         : request<any>(`/docker/containers/${id}/${action}`, { method: 'POST' }),
     logs: (id: string, tail = '200') => request<string>(`/docker/containers/${id}/logs?tail=${tail}`),
+    logsStream: (id: string) => {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const token = getToken() || ''
+      return `${proto}//${location.host}/api/docker/containers/${encodeURIComponent(id)}/logs/stream?tail=100&token=${encodeURIComponent(token)}`
+    },
     images: () => request<any[]>('/docker/images'),
     pullImage: (ref: string) =>
       request<any>('/docker/images/pull', { method: 'POST', body: JSON.stringify({ ref }) }),
@@ -150,6 +161,10 @@ export const api = {
     removeNetwork: (id: string) => request<any>(`/docker/networks/${id}`, { method: 'DELETE' }),
     compose: (action: 'up' | 'down' | 'pull' | 'ps', dir: string) =>
       request<any>(`/docker/compose/${action}`, { method: 'POST', body: JSON.stringify({ dir }) }),
+    composeDeploy: (yaml: string, name: string) =>
+      request<any>('/docker/compose/deploy', { method: 'POST', body: JSON.stringify({ yaml, name }) }),
+    bulkAction: (names: string[], action: string) =>
+      request<any[]>('/docker/bulk', { method: 'POST', body: JSON.stringify({ names, action }) }),
   },
 
   lxd: {
@@ -165,6 +180,7 @@ export const api = {
     updates: (name: string) => request<any>(`/lxd/instances/${encodeURIComponent(name)}/updates`),
     logs: (name: string) => request<string>(`/lxd/instances/${encodeURIComponent(name)}/logs`),
     processes: (name: string) => request<string>(`/lxd/instances/${encodeURIComponent(name)}/processes`),
+    ports: (name: string) => request<{ output: string }>(`/lxd/instances/${encodeURIComponent(name)}/ports?_t=${Date.now()}`),
     snapshots: (name: string) => request<any[]>(`/lxd/instances/${name}/snapshots`),
     createSnapshot: (name: string, snapshot: string) =>
       request<any>(`/lxd/instances/${name}/snapshots`, {
@@ -175,16 +191,30 @@ export const api = {
       request<any>(`/lxd/instances/${name}/snapshots/${snapshot}/restore`, { method: 'POST' }),
     deleteSnapshot: (name: string, snapshot: string) =>
       request<any>(`/lxd/instances/${name}/snapshots/${snapshot}`, { method: 'DELETE' }),
+    exportSnapshot: (name: string, snapshot: string) => `${API}/lxd/instances/${encodeURIComponent(name)}/snapshots/${encodeURIComponent(snapshot)}/export?token=${encodeURIComponent(getToken() || '')}`,
+    cloneInstance: (name: string, newName: string) =>
+      request<any>(`/lxd/instances/${name}/clone`, { method: 'POST', body: JSON.stringify({ name: newName }) }),
+    resizeInstance: (name: string, cpu: string, memory: string) =>
+      request<any>(`/lxd/instances/${name}/resize`, { method: 'POST', body: JSON.stringify({ cpu, memory }) }),
+    bulkAction: (names: string[], action: string) =>
+      request<any[]>('/lxd/bulk', { method: 'POST', body: JSON.stringify({ names, action }) }),
     backups: (name: string) => request<any[]>(`/lxd/instances/${name}/backups`),
     createBackup: (name: string, backup: string) =>
       request<any>(`/lxd/instances/${name}/backups`, {
         method: 'POST',
         body: JSON.stringify({ name: backup }),
       }),
-    restoreBackup: (name: string, backup: string) =>
-      request<any>(`/lxd/instances/${name}/backups/${backup}/restore`, { method: 'POST' }),
+    restoreBackup: (name: string, backup: string, newName?: string) =>
+      request<any>(`/lxd/instances/${name}/backups/${backup}/restore`, {
+        method: 'POST',
+        body: JSON.stringify(newName ? { new_name: newName } : {}),
+      }),
     deleteBackup: (name: string, backup: string) =>
       request<any>(`/lxd/instances/${name}/backups/${backup}`, { method: 'DELETE' }),
+    downloadBackup: (name: string, backup: string) => `${API}/lxd/instances/${encodeURIComponent(name)}/backups/${encodeURIComponent(backup)}/download?token=${encodeURIComponent(getToken() || '')}`,
+    verifyBackup: (name: string, backup: string) =>
+      request<any>(`/lxd/instances/${name}/backups/${backup}/verify`),
+    proxmoxExport: (name: string, backup: string) => `${API}/lxd/instances/${encodeURIComponent(name)}/backups/${encodeURIComponent(backup)}/proxmox?token=${encodeURIComponent(getToken() || '')}`,
     images: () => request<any[]>('/lxd/images'),
     pullImage: (remote: string) =>
       request<any>('/lxd/images/pull', { method: 'POST', body: JSON.stringify({ remote }) }),
@@ -209,27 +239,26 @@ export const api = {
       request<any>(`/lxd/acls/${encodeURIComponent(name)}`, { method: 'DELETE' }),
     files: (name: string, path: string) =>
       request<any[]>(`/lxd/instances/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`),
-    uploadFile: (name: string, path: string, file: File) => {
+    uploadFile: (name: string, path: string, file: File, onProgress?: (pct: number) => void) => {
       const form = new FormData()
       form.append('file', file)
       const token = getToken()
-      const headers: Record<string, string> = {}
-      if (token) headers.Authorization = `Bearer ${token}`
-      return fetch(
-        `${API}/lxd/instances/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`,
-        { method: 'POST', body: form, headers },
-      ).then(async (res) => {
-        if (!res.ok) {
-          let msg = res.statusText
-          try {
-            const body = await res.json()
-            if (body?.error) msg = body.error
-          } catch {
-            /* ignore */
-          }
-          throw new Error(msg)
+      return new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', `${API}/lxd/instances/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`)
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
         }
-        return res.json()
+        xhr.onload = () => {
+          try {
+            const data = JSON.parse(xhr.responseText)
+            if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+            else reject(new Error(data?.error || 'upload failed'))
+          } catch { reject(new Error('upload failed')) }
+        }
+        xhr.onerror = () => reject(new Error('upload failed'))
+        xhr.send(form)
       })
     },
     deleteFile: (name: string, path: string) =>
@@ -261,18 +290,27 @@ export const api = {
     create: (body: any) =>
       request<any>('/vms', { method: 'POST', body: JSON.stringify(body) }),
     isos: () => request<any[]>('/vms/isos'),
-    uploadISO: (file: File) => {
+    uploadISO: (file: File, onProgress?: (pct: number) => void) => {
       const form = new FormData()
       form.append('iso', file)
-      const headers: Record<string, string> = {}
       const token = getToken()
-      if (token) headers.Authorization = `Bearer ${token}`
-      return fetch(`${API}/vms/isos/upload`, { method: 'POST', body: form, headers }).then(
-        (res) => {
-          if (!res.ok) throw new Error('ISO upload failed')
-          return res.json()
-        },
-      )
+      return new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', `${API}/vms/isos/upload`)
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
+        }
+        xhr.onload = () => {
+          try {
+            const data = JSON.parse(xhr.responseText)
+            if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+            else reject(new Error('ISO upload failed'))
+          } catch { reject(new Error('ISO upload failed')) }
+        }
+        xhr.onerror = () => reject(new Error('ISO upload failed'))
+        xhr.send(form)
+      })
     },
     deleteISO: (name: string) =>
       request<any>(`/vms/isos/${encodeURIComponent(name)}`, { method: 'DELETE' }),
@@ -295,22 +333,35 @@ export const api = {
       request<any>(`/vms/${uuid}/resize`, { method: 'POST', body: JSON.stringify(body) }),
     attachISO: (uuid: string, iso: string) =>
       request<any>(`/vms/${uuid}/attach-iso`, { method: 'POST', body: JSON.stringify({ iso }) }),
+    ports: (uuid: string, full = false) =>
+      request<any>(`/vms/${uuid}/ports${full ? '?scan=full' : ''}`),
   },
 
   proxmox: {
     backups: () => request<any[]>('/proxmox/backups'),
-    upload: (file: File) => {
+    upload: (file: File, onProgress?: (pct: number) => void) => {
       const form = new FormData()
       form.append('backup', file)
       const headers: Record<string, string> = {}
       const token = getToken()
       if (token) headers.Authorization = `Bearer ${token}`
-      return fetch(`${API}/proxmox/backups/upload`, { method: 'POST', body: form, headers }).then(
-        (res) => {
-          if (!res.ok) return res.json().then((b) => { throw new Error(b?.error || 'upload failed') })
-          return res.json()
-        },
-      )
+      return new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', `${API}/proxmox/backups/upload`)
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
+        }
+        xhr.onload = () => {
+          try {
+            const data = JSON.parse(xhr.responseText)
+            if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+            else reject(new Error(data?.error || 'upload failed'))
+          } catch { reject(new Error('upload failed')) }
+        }
+        xhr.onerror = () => reject(new Error('upload failed'))
+        xhr.send(form)
+      })
     },
     remove: (filename: string) =>
       request<any>(`/proxmox/backups/${encodeURIComponent(filename)}`, { method: 'DELETE' }),

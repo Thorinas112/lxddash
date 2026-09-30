@@ -1,6 +1,6 @@
 [Unit]
 Description=LXD Dash - server management dashboard
-After=network-online.target lxd.service libvirtd.service docker.service
+After=network-online.target libvirtd.service docker.service lxd.service snap.lxd.daemon.service
 Wants=network-online.target
 
 [Service]

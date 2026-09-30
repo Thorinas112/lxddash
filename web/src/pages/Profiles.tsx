@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useState } from 'react'
+import { confirm } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 import AssistModal from '../components/AssistModal'
 import Wizard from '../components/Wizard'
@@ -32,7 +33,7 @@ export default function Profiles() {
   }, [load])
 
   async function remove(name: string) {
-    if (!window.confirm(`Delete profile ${name}?`)) return
+    if (!(await confirm(`Delete profile ${name}?`))) return
     try {
       await api.lxd.deleteProfile(name)
       await load()

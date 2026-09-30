@@ -94,6 +94,27 @@ export default function Dashboard() {
         <StatCard label="Uptime" value={host ? fmtUptime(host.uptime) : '—'} />
       </div>
 
+      {/* Service Health */}
+      <div className="mt-4 rounded-lg border border-gray-200 bg-white p-4">
+        <div className="mb-3 text-sm font-medium text-gray-700">Service Health</div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          {[
+            { name: 'Docker', ok: (data?.docker_count ?? 0) > 0 || !!data?.docker_ok },
+            { name: 'LXD', ok: (data?.lxd_count ?? 0) > 0 || !!data?.lxd_ok },
+            { name: 'VMs', ok: (data?.vm_count ?? 0) > 0 || !!data?.libvirt_ok },
+            { name: 'Host', ok: !!host },
+          ].map((s) => (
+            <div key={s.name} className="flex items-center gap-2 rounded border border-gray-100 px-3 py-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${s.ok ? 'bg-green-500' : 'bg-red-400'}`} />
+              <span className="text-sm font-medium text-gray-700">{s.name}</span>
+              <span className={`ml-auto text-xs ${s.ok ? 'text-green-600' : 'text-red-500'}`}>
+                {s.ok ? 'OK' : 'Unavailable'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {host && (
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">

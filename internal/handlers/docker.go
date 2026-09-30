@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/websocket"
 
@@ -141,6 +143,40 @@ func (h *Handlers) DockerContainerLogs(w http.ResponseWriter, r *http.Request) {
 	defer rc.Close()
 	w.Header().Set("Content-Type", "text/plain")
 	_, _ = io.Copy(w, rc)
+}
+
+// DockerLogsStream streams container logs via WebSocket.
+func (h *Handlers) DockerLogsStream(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	tail := r.URL.Query().Get("tail")
+	if tail == "" {
+		tail = "100"
+	}
+	rc, err := h.deps.Docker.Logs(r.Context(), r.PathValue("id"), tail)
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte("Error: "+err.Error()))
+		return
+	}
+	defer rc.Close()
+	// Stream log lines as text messages.
+	buf := make([]byte, 4096)
+	for {
+		n, err := rc.Read(buf)
+		if n > 0 {
+			conn.WriteMessage(websocket.TextMessage, buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
 }
 
 func (h *Handlers) DockerImages(w http.ResponseWriter, r *http.Request) {
@@ -392,4 +428,87 @@ func (h *Handlers) DockerExec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	<-execErr
+}
+
+// DockerComposeDeploy writes a compose YAML to a temp file and runs docker compose up.
+func (h *Handlers) DockerComposeDeploy(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	var req struct {
+		YAML   string `json:"yaml"`
+		Name   string `json:"name"`
+		Dir    string `json:"dir"`
+		Action string `json:"action"` // "up" (default), "down", "pull"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.YAML == "" {
+		writeErr(w, http.StatusBadRequest, "yaml required")
+		return
+	}
+	if req.Action == "" {
+		req.Action = "up"
+	}
+	if req.Dir == "" {
+		req.Dir = "/tmp"
+	}
+	if req.Name == "" {
+		req.Name = "lxddash-deploy"
+	}
+	// Write compose file.
+	composePath := req.Dir + "/docker-compose-" + req.Name + ".yaml"
+	if err := os.WriteFile(composePath, []byte(req.YAML), 0644); err != nil {
+		writeErr(w, http.StatusInternalServerError, "write compose file: "+err.Error())
+		return
+	}
+	defer os.Remove(composePath)
+	// Run compose action.
+	output, err := h.deps.Docker.ComposeUp(r.Context(), req.Dir)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.logActivity("docker", "compose-up", req.Name, "compose up completed", nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "up", "name": req.Name, "output": output})
+}
+
+// DockerBulkAction performs start/stop/restart/remove on multiple containers.
+func (h *Handlers) DockerBulkAction(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	var req struct {
+		Names  []string `json:"names"`
+		Action string   `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Names) == 0 {
+		writeErr(w, http.StatusBadRequest, "names and action required")
+		return
+	}
+	type result struct {
+		Name  string `json:"name"`
+		Error string `json:"error,omitempty"`
+	}
+	var results []result
+	for _, id := range req.Names {
+		var err error
+		switch req.Action {
+		case "start":
+			err = h.deps.Docker.Start(r.Context(), id)
+		case "stop":
+			err = h.deps.Docker.Stop(r.Context(), id)
+		case "restart":
+			err = h.deps.Docker.Restart(r.Context(), id)
+		case "remove":
+			err = h.deps.Docker.Remove(r.Context(), id, true)
+		}
+		r := result{Name: id}
+		if err != nil {
+			r.Error = err.Error()
+		}
+		results = append(results, r)
+	}
+	h.logActivity("docker", "bulk-"+req.Action, "", fmt.Sprintf("%s on %d containers", req.Action, len(req.Names)), nil)
+	writeJSON(w, http.StatusOK, results)
 }

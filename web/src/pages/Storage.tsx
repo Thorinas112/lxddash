@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useState } from 'react'
+import { confirm } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 import AssistModal from '../components/AssistModal'
 import Spinner from '../components/Spinner'
@@ -50,7 +51,7 @@ export default function Storage() {
   }, [load])
 
   async function delVolume(pool: string, name: string) {
-    if (!window.confirm(`Delete volume ${name} from ${pool}?`)) return
+    if (!(await confirm(`Delete volume ${name} from ${pool}?`))) return
     setBusy(`vol:${name}`)
     try {
       await api.lxd.deleteStorageVolume(pool, name)
@@ -63,7 +64,7 @@ export default function Storage() {
   }
 
   async function delPool(name: string) {
-    if (!window.confirm(`Delete storage pool ${name}? This cannot be undone.`)) return
+    if (!(await confirm(`Delete storage pool ${name}? This cannot be undone.`))) return
     setBusy(`pool:${name}`)
     try {
       await api.lxd.deleteStoragePool(name)

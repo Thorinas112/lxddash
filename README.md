@@ -7,8 +7,10 @@ A self-hosted, Proxmox-style web dashboard for managing an Ubuntu server's **Doc
 - **Host overview** — live CPU / memory / disk / network stats over WebSocket
 - **Docker** — list, create, start, stop, restart, delete containers; view logs; pull images
 - **LXD** — list, create (from image), start, stop, restart, delete instances; snapshots (create / restore / delete)
-- **KVM/QEMU (libvirt)** — create VMs (name, CPU, RAM, disk, install ISO), start, shutdown, reboot, force-stop, delete; in-browser VNC console (noVNC)
-- **Proxmox migration** — import vzdump backups: LXC containers → LXD, QEMU VMs → libvirt
+- **KVM/QEMU (libvirt)** — create VMs, start/stop/reboot/delete, snapshots, resize, autostart; in-browser VNC console + serial terminal; network interfaces table + open-port discovery with one-click localhost port forwards
+- **Proxmox migration** — import vzdump backups: LXC containers → LXD, QEMU VMs → libvirt (compressed archives decompressed automatically; OVMF/UEFI VMs supported)
+- **Port forwards** — expose container/VM service ports on the host, persisted across restarts
+- **Activity log** — audit trail of management actions, persisted across restarts
 - **Auth** — JWT login; on first run a setup page lets you create the admin account
 
 ## Architecture
@@ -42,8 +44,8 @@ snap install lxd && lxd init
 apt install -y qemu-kvm libvirt-daemon-system
 
 # Proxmox imports only
-apt install -y qemu-utils lxd-client   # qemu-img + lxc CLI
-# the 'vma' tool comes from Proxmox: apt install vma
+apt install -y qemu-utils lxd-client zstd xz-utils lzop  # qemu-img, lxc CLI, decompressors
+# the 'vma' tool comes from Proxmox (not in Ubuntu repos): apt install vma
 ```
 
 ## Build
@@ -172,9 +174,10 @@ How imports work:
 - **LXC backups** (`vzdump-lxc-*.tar.zst|gz|xz|lzo`) — the archive is extracted, the PVE config
   (hostname, memory, cores, rootfs size) is parsed, an LXD container is created, and the rootfs
   is pushed into it with `lxc file push`. Requires the `lxc` CLI.
-- **QEMU backups** (`vzdump-qemu-*.vma.zst|gz`) — extracted with the `vma` tool, the disk is
-  converted to qcow2 with `qemu-img`, and a libvirt domain is defined (VNC console included).
-  Requires `vma` and `qemu-utils`.
+- **QEMU backups** (`vzdump-qemu-*.vma.zst|gz|xz|lzo`) — decompressed automatically, extracted
+  with the `vma` tool, the disk is converted to qcow2 with `qemu-img`, and a libvirt domain is
+  defined (VNC console included). Requires `vma`, `qemu-utils`, and the matching decompressor
+  (`zstd`, `gzip`, `xz-utils`, or `lzop`).
 
 > Note: network config from Proxmox (bridges) is not carried over — imported containers/VMs
 > attach to the LXD/libvirt default network. Adjust networking after import as needed.

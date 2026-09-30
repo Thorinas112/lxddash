@@ -2,6 +2,7 @@
 import { api } from '../api/client'
 import AssistModal from '../components/AssistModal'
 import Badge from '../components/Badge'
+import { confirm } from '../components/ConfirmDialog'
 import Spinner from '../components/Spinner'
 import Wizard from '../components/Wizard'
 import { btnAction, btnPrimary, inputCls } from '../components/ui'
@@ -25,6 +26,7 @@ export default function Backups() {
   const [error, setError] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [assistOpen, setAssistOpen] = useState(false)
+  const [jobBusy, setJobBusy] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -49,11 +51,14 @@ export default function Backups() {
   }, [load, jobs.some((j) => j.running)])
 
   async function toggle(job: Job) {
+    setJobBusy(job.id)
     try {
       await api.backups.toggle(job.id, !job.enabled)
       await load()
     } catch (e: any) {
       setError(e.message)
+    } finally {
+      setJobBusy('')
     }
   }
 
@@ -70,12 +75,15 @@ export default function Backups() {
   }
 
   async function remove(job: Job) {
-    if (!window.confirm(`Delete backup job ${job.name}?`)) return
+    if (!(await confirm(`Delete backup job ${job.name}?`))) return
+    setJobBusy(job.id)
     try {
       await api.backups.remove(job.id)
       await load()
     } catch (e: any) {
       setError(e.message)
+    } finally {
+      setJobBusy('')
     }
   }
 
@@ -133,26 +141,26 @@ export default function Backups() {
                 )}
                 <button
                   onClick={() => toggle(j)}
-                  disabled={j.running}
+                  disabled={j.running || !!jobBusy}
                   className={`rounded px-2 py-1 text-xs ${
                     j.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'
                   }`}
                 >
-                  {j.enabled ? 'Enabled' : 'Disabled'}
+                  {jobBusy === j.id ? '…' : j.enabled ? 'Enabled' : 'Disabled'}
                 </button>
                 <button
                   onClick={() => runNow(j)}
-                  disabled={j.running}
+                  disabled={j.running || !!jobBusy}
                   className={btnAction('bg-blue-100 text-blue-700')}
                 >
                   {j.running ? '…' : 'Run now'}
                 </button>
                 <button
                   onClick={() => remove(j)}
-                  disabled={j.running}
+                  disabled={j.running || !!jobBusy}
                   className={btnAction('bg-red-100 text-red-700')}
                 >
-                  ✕
+                  {jobBusy === j.id ? '…' : '✕'}
                 </button>
               </div>
             </div>

@@ -1,6 +1,7 @@
 ﻿import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import AssistModal from '../components/AssistModal'
+import { confirm } from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
 import Wizard from '../components/Wizard'
 import { btnAction, btnGhost, btnPrimary } from '../components/ui'
@@ -58,7 +59,7 @@ export default function Networks() {
   }, [load, loadForwards, loadInstances])
 
   async function del(name: string) {
-    if (!window.confirm(`Delete network ${name}?`)) return
+    if (!(await confirm(`Delete network ${name}?`))) return
     setBusy(name)
     try {
       await api.lxd.deleteNetwork(name)
@@ -196,7 +197,7 @@ export default function Networks() {
                     <td className="px-4 py-3 text-right">
                       <button
                         onClick={async () => {
-                          if (!window.confirm(`Remove port forward ${f.name || f.id}?`)) return
+                          if (!(await confirm(`Remove port forward ${f.name || f.id}?`))) return
                           try {
                             await api.forwards.remove(f.id)
                             await loadForwards()

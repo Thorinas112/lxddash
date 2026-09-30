@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,31 +23,43 @@ func (h *Handlers) ProxmoxBackups(w http.ResponseWriter, r *http.Request) {
 }
 
 // ProxmoxUpload accepts a multipart upload of a vzdump backup file and
-// saves it into the dump directory.
+// streams it directly to the dump directory (no in-memory buffering,
+// so multi-GB files upload without freezing).
 func (h *Handlers) ProxmoxUpload(w http.ResponseWriter, r *http.Request) {
 	if h.deps.Proxmox == nil {
 		writeErr(w, http.StatusServiceUnavailable, "proxmox service unavailable")
 		return
 	}
-	if err := r.ParseMultipartForm(512 << 20); err != nil { // 512 MB max in memory
+	mr, err := r.MultipartReader()
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
 		return
 	}
-	file, header, err := r.FormFile("backup")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "missing 'backup' file field")
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "read form: "+err.Error())
+			return
+		}
+		if part.FormName() != "backup" {
+			part.Close()
+			continue
+		}
+		path, err := h.deps.Proxmox.Upload(part.FileName(), part)
+		part.Close()
+		if err != nil {
+			h.logActivity("proxmox", "upload", part.FileName(), "", err)
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.logActivity("proxmox", "upload", part.FileName(), "backup uploaded", nil)
+		writeJSON(w, http.StatusCreated, map[string]string{"path": path, "filename": part.FileName()})
 		return
 	}
-	defer file.Close()
-
-	path, err := h.deps.Proxmox.Upload(header.Filename, file)
-	if err != nil {
-		h.logActivity("proxmox", "upload", header.Filename, "", err)
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	h.logActivity("proxmox", "upload", header.Filename, "backup uploaded", nil)
-	writeJSON(w, http.StatusCreated, map[string]string{"path": path, "filename": header.Filename})
+	writeErr(w, http.StatusBadRequest, "missing 'backup' file field")
 }
 
 // ProxmoxDelete removes a backup file from the dump directory.

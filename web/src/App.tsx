@@ -29,6 +29,7 @@ import Systemd from './pages/Systemd'
 import Settings from './pages/Settings'
 import { api } from './api/client'
 import { useAuth } from './hooks/useAuth'
+import ConfirmDialogProvider from './components/ConfirmDialog'
 
 export default function App() {
   const { token } = useAuth()
@@ -53,6 +54,7 @@ export default function App() {
   if (!token) return <Login />
 
   return (
+    <ConfirmDialogProvider>
     <Routes>
       {/* Popup routes — no Layout/sidebar */}
       <Route path="/lxd/:name/console-popup" element={<LXDConsole isPopup={true} />} />
@@ -89,5 +91,6 @@ export default function App() {
         </Layout>
       } />
     </Routes>
+    </ConfirmDialogProvider>
   )
 }

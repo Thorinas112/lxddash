@@ -1,6 +1,7 @@
 package proxmox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +38,7 @@ type Task struct {
 	VMID      int       `json:"vmid"`
 	Type      string    `json:"type"` // "qemu" or "lxc"
 	Source    string    `json:"source"`
-	Status    string    `json:"status"` // running | done | failed
+	Status    string    `json:"status"`   // running | done | failed
 	Progress  int       `json:"progress"` // 0-100
 	Message   string    `json:"message"`
 	CreatedAt time.Time `json:"created_at"`
@@ -278,9 +280,41 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 
 	s.updateProgress(task, 60, "copying rootfs into container (this can take a while)")
 
+	// Use lxc file push which handles the rootfs correctly (preserves boot).
+	pushEnv := append(os.Environ(), "PATH=/snap/bin:"+os.Getenv("PATH"))
 	cmd := exec.CommandContext(ctx, "lxc", "file", "push", "-r", rootfsDir+"/.", name+"/")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("rootfs copy failed: %v: %s", err, out)
+	cmd.Env = pushEnv
+	_, _ = cmd.CombinedOutput()
+	// lxc file push returns exit 1 for some special files (sockets, etc)
+	// but still pushes the vast majority of files successfully.
+
+	s.updateProgress(task, 80, "checking for Docker installation")
+	// Post-import: if Docker was in the backup, reinstall it since the rootfs
+	// push can't reliably transfer Docker's special files and large /var/lib/docker.
+	dockerDir := filepath.Join(rootfsDir, "etc", "docker")
+	if _, err := os.Stat(dockerDir); err == nil {
+		s.updateProgress(task, 82, "installing Docker (detected in backup)")
+		_, _ = s.lxd.ExecOutput(ctx, name, []string{"sh", "-c",
+			"curl -fsSL https://get.docker.com | sh 2>&1 | tail -5"})
+
+		s.updateProgress(task, 90, "restoring Docker configuration")
+		// Push Docker config from backup.
+		dockerConfSrc := filepath.Join(rootfsDir, "etc", "docker", "daemon.json")
+		if data, err := os.ReadFile(dockerConfSrc); err == nil {
+			_ = s.lxd.WriteFile(ctx, name, "/etc/docker/daemon.json", data, 0o644)
+		}
+		// Push docker-compose.yml if present and recreate containers.
+		composeSrc := filepath.Join(rootfsDir, "home", "mark", "docker-compose.yml")
+		if data, err := os.ReadFile(composeSrc); err == nil {
+			_ = s.lxd.WriteFile(ctx, name, "/root/docker-compose.yml", data, 0o644)
+			s.updateProgress(task, 95, "recreating Docker containers from compose file")
+			_, _ = s.lxd.ExecOutput(ctx, name, []string{"sh", "-c",
+				"systemctl start docker && cd /root && docker compose up -d 2>&1 | tail -5"})
+		} else {
+			// No compose file — just start Docker daemon.
+			_, _ = s.lxd.ExecOutput(ctx, name, []string{"sh", "-c", "systemctl start docker"})
+		}
+		s.updateProgress(task, 98, "Docker installed and running")
 	}
 
 	s.updateProgress(task, 100, "container imported successfully")
@@ -300,19 +334,27 @@ func (s *Service) importVM(ctx context.Context, path string, task *Task) error {
 	}
 
 	dir := filepath.Join(s.stagingDir, task.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// `vma extract` creates the target directory itself and aborts with
+	// "unable to create target directory - File exists" if it is already
+	// there. Clear leftovers from any previous (killed) run instead of
+	// pre-creating it — same approach as Proxmox's restore (rmtree first).
+	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
 
 	s.update(task, "extracting VMA archive")
-	cmd := exec.CommandContext(ctx, "vma", "extract", path, dir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("vma extract failed: %v: %s", err, out)
+	if err := runVMAExtract(ctx, path, dir); err != nil {
+		return err
 	}
 
-	disks, err := filepath.Glob(filepath.Join(dir, "*.img"))
-	if err != nil || len(disks) == 0 {
+	// vma extract writes raw disk images named after the Proxmox drive
+	// config (tmp-disk-drive-*.raw); .img kept as fallback for older versions.
+	disks, _ := filepath.Glob(filepath.Join(dir, "*.raw"))
+	if len(disks) == 0 {
+		disks, _ = filepath.Glob(filepath.Join(dir, "*.img"))
+	}
+	if len(disks) == 0 {
 		return fmt.Errorf("no disk images found in VMA archive")
 	}
 
@@ -330,14 +372,38 @@ func (s *Service) importVM(ctx context.Context, path string, task *Task) error {
 	}
 	qcow := filepath.Join(s.vmImageDir, name+".qcow2")
 
+	// Pick the OS disk: the config's boot disk if it was extracted,
+	// otherwise the largest image (helper disks like the 4M efidisk0
+	// sort first alphabetically and must not win).
+	disk := pickBootDisk(disks, cfg.BootDisk)
+
 	s.update(task, "converting disk image to qcow2")
-	cmd = exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2", disks[0], qcow)
+	cmd := exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2", disk, qcow)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("qemu-img convert failed: %v: %s", err, out)
 	}
 
+	// OVMF (UEFI) VMs need a persistent NVRAM store: reuse the extracted
+	// efidisk0 (Proxmox's EFI vars image, copied out of staging before it
+	// is cleaned up) or seed one from the local OVMF_VARS template.
+	var ovmfCode, nvram string
+	if cfg.Bios == "ovmf" {
+		code, varsTmpl := findOVMF()
+		src := findFileContains(disks, "efidisk")
+		if src == "" {
+			src = varsTmpl
+		}
+		if code != "" && src != "" {
+			ovmfCode = code
+			nvram = filepath.Join(s.vmImageDir, name+"_VARS.fd")
+			if err := copyFile(src, nvram); err != nil {
+				return fmt.Errorf("prepare EFI NVRAM: %w", err)
+			}
+		}
+	}
+
 	s.update(task, "defining VM in libvirt")
-	xml := buildDomainXML(name, cfg.Memory, cfg.Cores, qcow)
+	xml := buildDomainXML(name, cfg.Memory, cfg.Cores, qcow, ovmfCode, nvram, latestQ35Machine())
 	if err := s.libvirt.DefineXML(xml); err != nil {
 		return fmt.Errorf("define domain: %w", err)
 	}
@@ -346,9 +412,94 @@ func (s *Service) importVM(ctx context.Context, path string, task *Task) error {
 	return nil
 }
 
+// vmaDecompressor returns the decompressor command that turns a compressed
+// vzdump VMA archive into a raw VMA stream, plus the apt package that
+// provides it. Returns nil when the archive is not compressed.
+func vmaDecompressor(path string) (cmd []string, pkg string) {
+	switch {
+	case strings.HasSuffix(path, ".zst"):
+		return []string{"zstd", "-d", "-c"}, "zstd"
+	case strings.HasSuffix(path, ".gz"):
+		return []string{"gzip", "-dc"}, "gzip"
+	case strings.HasSuffix(path, ".xz"):
+		return []string{"xz", "-dc"}, "xz-utils"
+	case strings.HasSuffix(path, ".lzo"):
+		return []string{"lzop", "-dc"}, "lzop"
+	}
+	return nil, ""
+}
+
+// runVMAExtract extracts a VMA archive into dir.
+//
+// The `vma` tool only understands a raw VMA stream (it aborts with
+// "wrong magic number" on compressed input), so compressed vzdump
+// archives are piped through a decompressor first — the same approach
+// Proxmox uses in restore_vma_archive: zstd|gzip|xz|lzop | vma extract -.
+func runVMAExtract(ctx context.Context, path, dir string) error {
+	decomp, pkg := vmaDecompressor(path)
+	vmaArgs := []string{"extract", path, dir}
+
+	var dec *exec.Cmd
+	if decomp != nil {
+		if _, err := exec.LookPath(decomp[0]); err != nil {
+			return fmt.Errorf("'%s' is required to extract %s (apt install %s)",
+				decomp[0], filepath.Base(path), pkg)
+		}
+		decArgs := append(append([]string{}, decomp[1:]...), path)
+		dec = exec.CommandContext(ctx, decomp[0], decArgs...)
+		vmaArgs = []string{"extract", "-", dir} // read raw VMA stream from stdin
+	}
+
+	vma := exec.CommandContext(ctx, "vma", vmaArgs...)
+	if dec == nil {
+		if out, err := vma.CombinedOutput(); err != nil {
+			return fmt.Errorf("vma extract failed: %v: %s", err, out)
+		}
+		return nil
+	}
+
+	pr, pw := io.Pipe()
+	dec.Stdout = pw
+	decErrBuf := &bytes.Buffer{}
+	dec.Stderr = decErrBuf
+	vma.Stdin = pr
+	if err := dec.Start(); err != nil {
+		return fmt.Errorf("failed to start %s: %w", decomp[0], err)
+	}
+
+	// Close the pipe writer once the decompressor exits so `vma` sees EOF.
+	// Doing this in a goroutine avoids deadlocking when `vma` exits early
+	// (e.g. bad magic) while the decompressor is still blocked writing.
+	decDone := make(chan error, 1)
+	go func() {
+		err := dec.Wait()
+		pw.Close()
+		decDone <- err
+	}()
+
+	out, vmaErr := vma.CombinedOutput()
+	pr.Close()
+	waitErr := <-decDone
+
+	if vmaErr != nil {
+		if waitErr != nil && decErrBuf.Len() > 0 {
+			return fmt.Errorf("vma extract failed: %v: %s (decompressor %s: %v: %s)",
+				vmaErr, out, decomp[0], waitErr, strings.TrimSpace(decErrBuf.String()))
+		}
+		return fmt.Errorf("vma extract failed: %v: %s", vmaErr, out)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("decompressing %s failed: %v: %s",
+			filepath.Base(path), waitErr, strings.TrimSpace(decErrBuf.String()))
+	}
+	return nil
+}
+
 // pveConfig holds the subset of a Proxmox config file we care about.
 type pveConfig struct {
 	Hostname   string
+	BootDisk   string
+	Bios       string
 	Memory     int
 	Cores      int
 	RootfsSize string
@@ -374,6 +525,24 @@ func parsePVEConfig(path string) (*pveConfig, error) {
 		switch key {
 		case "hostname":
 			cfg.Hostname = val
+		case "name":
+			// qemu-server.conf uses "name:" where pct.conf uses "hostname:"
+			if cfg.Hostname == "" {
+				cfg.Hostname = val
+			}
+		case "bios":
+			cfg.Bios = val
+		case "boot":
+			// boot: order=scsi0,ide2 — first device wins; only accept
+			// device-style names (ending in a digit), not old "boot: c".
+			val = strings.TrimPrefix(val, "order=")
+			if i := strings.IndexByte(val, ','); i >= 0 {
+				val = val[:i]
+			}
+			val = strings.TrimSpace(val)
+			if n := len(val); n > 0 && val[n-1] >= '0' && val[n-1] <= '9' {
+				cfg.BootDisk = val
+			}
 		case "memory":
 			fmt.Sscanf(val, "%d", &cfg.Memory)
 		case "cores":
@@ -411,14 +580,22 @@ func extractArchive(path, dest string) error {
 	return nil
 }
 
-func buildDomainXML(name string, memoryMB, cores int, diskPath string) string {
+// buildDomainXML builds libvirt domain XML for an imported VM. When
+// ovmfCode+nvram are set the domain boots via OVMF (UEFI); otherwise via
+// SeaBIOS with a boot-from-disk order.
+func buildDomainXML(name string, memoryMB, cores int, diskPath, ovmfCode, nvram, machine string) string {
+	osBlock := fmt.Sprintf("    <type arch='x86_64' machine='%s'>hvm</type>\n    <boot dev='hd'/>", machine)
+	if ovmfCode != "" && nvram != "" {
+		osBlock = fmt.Sprintf("    <type arch='x86_64' machine='%s'>hvm</type>\n"+
+			"    <loader readonly='yes' type='pflash'>%s</loader>\n"+
+			"    <nvram>%s</nvram>", machine, ovmfCode, nvram)
+	}
 	return fmt.Sprintf(`<domain type='kvm'>
   <name>%s</name>
   <memory unit='MiB'>%d</memory>
   <vcpu placement='static'>%d</vcpu>
   <os>
-    <type arch='x86_64' machine='pc-q35-6.2'>hvm</type>
-    <boot dev='hd'/>
+%s
   </os>
   <features><acpi/><apic/></features>
   <devices>
@@ -435,7 +612,110 @@ func buildDomainXML(name string, memoryMB, cores int, diskPath string) string {
     <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>
     <video><model type='qxl'/></video>
   </devices>
-</domain>`, name, memoryMB, cores, diskPath)
+</domain>`, name, memoryMB, cores, osBlock, diskPath)
+}
+
+// pickBootDisk selects which extracted image is the OS disk: a filename
+// containing the config's boot disk device (e.g. "scsi0") if present,
+// otherwise the largest image — tiny helper disks (efidisk0, 4M) must not
+// be picked over the real OS disk.
+func pickBootDisk(disks []string, bootDisk string) string {
+	if bootDisk != "" {
+		if d := findFileContains(disks, bootDisk); d != "" {
+			return d
+		}
+	}
+	best := ""
+	var bestSize int64
+	for _, d := range disks {
+		if fi, err := os.Stat(d); err == nil && (best == "" || fi.Size() > bestSize) {
+			best, bestSize = d, fi.Size()
+		}
+	}
+	if best == "" {
+		return disks[0]
+	}
+	return best
+}
+
+// findFileContains returns the first path whose base name contains substr.
+func findFileContains(paths []string, substr string) string {
+	for _, p := range paths {
+		if strings.Contains(filepath.Base(p), substr) {
+			return p
+		}
+	}
+	return ""
+}
+
+// copyFile copies src to dst, creating/truncating dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+// ovmfCandidates lists (CODE, VARS) firmware pairs on common distro paths.
+var ovmfCandidates = [][2]string{
+	{"/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"},
+	{"/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd"},
+	{"/usr/share/edk2/ovmf/OVMF_CODE.fd", "/usr/share/edk2/ovmf/OVMF_VARS.fd"},
+	{"/usr/share/edk2/x64/OVMF_CODE.4m.fd", "/usr/share/edk2/x64/OVMF_VARS.4m.fd"},
+}
+
+// findOVMF locates OVMF firmware code + VARS template; empty if absent.
+func findOVMF() (code, vars string) {
+	for _, c := range ovmfCandidates {
+		if _, err := os.Stat(c[0]); err == nil {
+			if _, err := os.Stat(c[1]); err == nil {
+				return c[0], c[1]
+			}
+		}
+	}
+	return "", ""
+}
+
+// latestQ35Machine returns the newest pc-q35-X.Y machine type reported by
+// qemu-system-x86_64. Versioned machine types are deprecated and eventually
+// removed (pc-q35-6.2 warns on current QEMU), so imports target the current
+// one. Falls back to pc-q35-6.2 when detection is not possible.
+func latestQ35Machine() string {
+	out, err := exec.Command("qemu-system-x86_64", "-machine", "help").Output()
+	if err != nil {
+		return "pc-q35-6.2"
+	}
+	re := regexp.MustCompile(`^(pc-q35)-(\d+)\.(\d+)`)
+	best := ""
+	bestMajor, bestMinor := -1, -1
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if m := re.FindStringSubmatch(fields[0]); m != nil {
+			major, _ := strconv.Atoi(m[2])
+			minor, _ := strconv.Atoi(m[3])
+			if major > bestMajor || (major == bestMajor && minor > bestMinor) {
+				bestMajor, bestMinor = major, minor
+				best = fields[0]
+			}
+		}
+	}
+	if best == "" {
+		return "pc-q35-6.2"
+	}
+	return best
 }
 
 // toLXDSize converts a Proxmox size string (e.g. "2G", "512M") to the

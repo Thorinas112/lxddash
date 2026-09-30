@@ -1,6 +1,7 @@
 ﻿import { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
+import { confirm } from '../components/ConfirmDialog'
 import AssistModal from '../components/AssistModal'
 import Badge from '../components/Badge'
 import LiveGraphsModal from '../components/LiveGraphsModal'
@@ -74,6 +75,9 @@ export default function LXD() {
   const [updates, setUpdates] = useState<Record<string, InstanceUpdates>>({})
   const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [assistOpen, setAssistOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState('')
   const prevCpu = useRef<Record<string, { usage: number; t: number; cpus: number }>>({})
   const navigate = useNavigate()
 
@@ -131,6 +135,12 @@ export default function LXD() {
       .filter(Boolean)
   }
 
+  const filtered = instances.filter((inst) => {
+    if (!search) return true
+    const q = search.toLowerCase()
+    return inst.name.toLowerCase().includes(q) || inst.status.toLowerCase().includes(q) || (inst.type || '').toLowerCase().includes(q) || tags(inst).some(t => t.toLowerCase().includes(q))
+  })
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
@@ -172,10 +182,41 @@ export default function LXD() {
         </div>
       )}
 
+      {/* Search + bulk actions */}
+      <div className="mb-3 flex items-center gap-3">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Filter instances..."
+          className="w-full max-w-xs rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        {selected.size > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">{selected.size} selected</span>
+            <button disabled={!!bulkBusy} onClick={async () => { setBulkBusy('start'); try { await api.lxd.bulkAction([...selected], 'start') } finally { setBulkBusy(''); setSelected(new Set()); load() } }} className={btnAction('bg-green-100 text-green-700')}>{bulkBusy === 'start' ? '…' : 'Start'}</button>
+            <button disabled={!!bulkBusy} onClick={async () => { setBulkBusy('stop'); try { await api.lxd.bulkAction([...selected], 'stop') } finally { setBulkBusy(''); setSelected(new Set()); load() } }} className={btnAction('bg-amber-100 text-amber-700')}>{bulkBusy === 'stop' ? '…' : 'Stop'}</button>
+            <button disabled={!!bulkBusy} onClick={async () => { setBulkBusy('restart'); try { await api.lxd.bulkAction([...selected], 'restart') } finally { setBulkBusy(''); setSelected(new Set()); load() } }} className={btnAction('bg-blue-100 text-blue-700')}>{bulkBusy === 'restart' ? '…' : 'Restart'}</button>
+            <button disabled={!!bulkBusy} onClick={async () => { if (await confirm(`Delete ${selected.size} instances?`)) { setBulkBusy('delete'); try { await api.lxd.bulkAction([...selected], 'delete') } finally { setBulkBusy(''); setSelected(new Set()); load() } } }} className={btnAction('bg-red-100 text-red-700')}>{bulkBusy === 'delete' ? '…' : 'Delete'}</button>
+            <button disabled={!!bulkBusy} onClick={() => setSelected(new Set())} className={btnAction('bg-gray-100 text-gray-700')}>Clear</button>
+          </div>
+        )}
+      </div>
+
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
         <table className="w-full text-sm">
           <thead className="bg-panel2 text-left text-xs uppercase tracking-wide text-gray-500">
             <tr>
+              <th className="px-4 py-3 w-8">
+                <input
+                  type="checkbox"
+                  checked={filtered.length > 0 && filtered.every(i => selected.has(i.name))}
+                  onChange={(e) => {
+                    if (e.target.checked) setSelected(new Set(filtered.map(i => i.name)))
+                    else setSelected(new Set())
+                  }}
+                  className="h-3.5 w-3.5 rounded border-gray-300"
+                />
+              </th>
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Type</th>
               <th className="px-4 py-3">Status</th>
@@ -189,12 +230,25 @@ export default function LXD() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {instances.map((inst) => {
+            {filtered.map((inst) => {
               const memUsage = inst.state?.memory?.usage || 0
               const memTotal = inst.state?.memory?.total || 0
               const memPct = memTotal > 0 ? (memUsage / memTotal) * 100 : 0
               return (
               <tr key={inst.name} className="bg-white hover:bg-gray-50">
+                <td className="px-4 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(inst.name)}
+                    onChange={(e) => {
+                      const next = new Set(selected)
+                      if (e.target.checked) next.add(inst.name)
+                      else next.delete(inst.name)
+                      setSelected(next)
+                    }}
+                    className="h-3.5 w-3.5 rounded border-gray-300"
+                  />
+                </td>
                 <td className="whitespace-nowrap px-4 py-3 font-medium text-gray-900">
                   <button
                     onClick={() => navigate(`/lxd/${encodeURIComponent(inst.name)}`)}
@@ -267,12 +321,13 @@ export default function LXD() {
                   ) : (
                     <div className="flex flex-wrap gap-1">
                       {tags(inst).map((t) => (
-                        <span
+                        <button
                           key={t}
-                          className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                          onClick={() => setSearch(t)}
+                          className="cursor-pointer rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-200"
                         >
                           {t}
-                        </span>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -280,10 +335,10 @@ export default function LXD() {
               </tr>
               )
             })}
-            {instances.length === 0 && (
+            {filtered.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
-                  No instances found
+                <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+                  {search ? 'No instances match filter' : 'No instances found'}
                 </td>
               </tr>
             )}
@@ -756,7 +811,7 @@ function SnapshotsModal({ name, onClose }: { name: string; onClose: () => void }
   }
 
   async function restore(snapshot: string) {
-    if (!window.confirm(`Restore ${name} to snapshot ${snapshot}?`)) return
+    if (!(await confirm(`Restore ${name} to snapshot ${snapshot}?`))) return
     setBusy(snapshot)
     try {
       await api.lxd.restoreSnapshot(name, snapshot)
@@ -769,7 +824,7 @@ function SnapshotsModal({ name, onClose }: { name: string; onClose: () => void }
   }
 
   async function remove(snapshot: string) {
-    if (!window.confirm(`Delete snapshot ${snapshot}?`)) return
+    if (!(await confirm(`Delete snapshot ${snapshot}?`))) return
     setBusy(snapshot)
     try {
       await api.lxd.deleteSnapshot(name, snapshot)
@@ -804,17 +859,25 @@ function SnapshotsModal({ name, onClose }: { name: string; onClose: () => void }
           <div key={s.name} className="flex items-center justify-between bg-white px-3 py-2 text-sm">
             <span className="text-gray-900">{s.name}</span>
             <div className="flex gap-1">
+              <a
+                href={api.lxd.exportSnapshot(name, s.name)}
+                className={btnAction('bg-green-100 text-green-700')}
+              >
+                Download
+              </a>
               <button
+                disabled={!!busy}
                 onClick={() => restore(s.name)}
                 className={btnAction('bg-blue-100 text-blue-700')}
               >
-                Restore
+                {busy === s.name ? '…' : 'Restore'}
               </button>
               <button
+                disabled={!!busy}
                 onClick={() => remove(s.name)}
                 className={btnAction('bg-red-100 text-red-700')}
               >
-                Delete
+                {busy === s.name ? '…' : 'Delete'}
               </button>
             </div>
           </div>
@@ -1009,7 +1072,7 @@ function BackupsModal({ name, onClose }: { name: string; onClose: () => void }) 
   }
 
   async function restore(backup: string) {
-    if (!window.confirm(`Restore ${name} from backup ${backup}?\n\nThis will overwrite the current instance.`)) return
+    if (!(await confirm(`Restore ${name} from backup ${backup}?\n\nThis will overwrite the current instance.`))) return
     setBusy(backup)
     try {
       await api.lxd.restoreBackup(name, backup)
@@ -1022,7 +1085,7 @@ function BackupsModal({ name, onClose }: { name: string; onClose: () => void }) 
   }
 
   async function remove(backup: string) {
-    if (!window.confirm(`Delete backup ${backup}?`)) return
+    if (!(await confirm(`Delete backup ${backup}?`))) return
     setBusy(backup)
     try {
       await api.lxd.deleteBackup(name, backup)
@@ -1057,17 +1120,25 @@ function BackupsModal({ name, onClose }: { name: string; onClose: () => void }) 
           <div key={b.name} className="flex items-center justify-between bg-white px-3 py-2 text-sm">
             <span className="text-gray-900">{b.name}</span>
             <div className="flex gap-1">
+              <a
+                href={api.lxd.downloadBackup(name, b.name)}
+                className={btnAction('bg-green-100 text-green-700')}
+              >
+                Download
+              </a>
               <button
+                disabled={!!busy}
                 onClick={() => restore(b.name)}
                 className={btnAction('bg-blue-100 text-blue-700')}
               >
-                Restore
+                {busy === b.name ? '…' : 'Restore'}
               </button>
               <button
+                disabled={!!busy}
                 onClick={() => remove(b.name)}
                 className={btnAction('bg-red-100 text-red-700')}
               >
-                Delete
+                {busy === b.name ? '…' : 'Delete'}
               </button>
             </div>
           </div>
@@ -1088,6 +1159,7 @@ function FilesModal({ name, onClose }: { name: string; onClose: () => void }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [uploadPct, setUploadPct] = useState(0)
   const [fileContent, setFileContent] = useState('')
   const [viewing, setViewing] = useState<string | null>(null)
 
@@ -1131,7 +1203,7 @@ function FilesModal({ name, onClose }: { name: string; onClose: () => void }) {
   }
 
   async function del(entry: any) {
-    if (!window.confirm(`Delete ${entry.name}?`)) return
+    if (!(await confirm(`Delete ${entry.name}?`))) return
     setBusy(entry.name)
     try {
       await api.lxd.deleteFile(name, join(path, entry.name))
@@ -1147,14 +1219,16 @@ function FilesModal({ name, onClose }: { name: string; onClose: () => void }) {
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
+    setUploadPct(0)
     setError('')
     try {
-      await api.lxd.uploadFile(name, join(path, file.name), file)
+      await api.lxd.uploadFile(name, join(path, file.name), file, (pct) => setUploadPct(pct))
       await load()
     } catch (err: any) {
       setError(err.message)
     } finally {
       setUploading(false)
+      setUploadPct(0)
       e.target.value = ''
     }
   }
@@ -1173,9 +1247,16 @@ function FilesModal({ name, onClose }: { name: string; onClose: () => void }) {
           {path}
         </span>
         <label className="cursor-pointer rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-500">
-          {uploading ? 'Uploading…' : 'Upload'}
-          <input type="file" onChange={upload} className="hidden" />
+          {uploading ? `Uploading… ${uploadPct}%` : 'Upload'}
+          <input type="file" onChange={upload} className="hidden" disabled={uploading} />
         </label>
+        {uploading && (
+          <div className="w-24">
+            <div className="h-1.5 overflow-hidden rounded bg-gray-200">
+              <div className="h-full rounded bg-blue-500 transition-all duration-300" style={{ width: `${uploadPct}%` }} />
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (

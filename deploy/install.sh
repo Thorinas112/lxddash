@@ -3,7 +3,7 @@
 # LXD Dash installer for Ubuntu/Debian servers
 #
 # Quick install (one-liner from GitHub):
-#   curl -sL https://raw.githubusercontent.com/YOUR_ORG/lxddash/main/deploy/install.sh | sudo bash
+#   curl -sL https://raw.githubusercontent.com/Thorinas112/lxddash/master/deploy/install.sh | sudo bash
 #
 # Local install (from cloned repo):
 #   sudo bash install.sh               # full install (deps + app)
@@ -87,11 +87,18 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
   echo "==> Installing system dependencies..."
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y curl ca-certificates qemu-kvm libvirt-daemon-system
+  apt-get install -y curl ca-certificates git qemu-kvm libvirt-daemon-system
 
   if [[ $WITH_PROXMOX -eq 1 ]]; then
     # qemu-img (disk conversion) + lxc CLI (rootfs import into LXD)
-    apt-get install -y qemu-utils lxd-client || true
+    # zstd/xz-utils/lzop decompress .vma archives before `vma extract`
+    apt-get install -y qemu-utils lxd-client zstd xz-utils lzop || true
+    # VM imports write qcow2 images + EFI NVRAM into the libvirt image dir;
+    # make it group-writable (setgid) so the service user can create files.
+    if [[ -d /var/lib/libvirt/images ]]; then
+      chown root:libvirt /var/lib/libvirt/images
+      chmod 2775 /var/lib/libvirt/images
+    fi
   fi
 
   # Docker (official install script)
@@ -131,6 +138,18 @@ for candidate in "$REPO_DIR/bin/lxddash-linux" "$REPO_DIR/bin/lxddash"; do
 done
 
 if [[ -z "$BINARY" ]]; then
+  # Building from source needs Go >= 1.26 (Incus client requirement);
+  # bootstrap the official toolchain if missing or too old.
+  if ! command -v go >/dev/null 2>&1 || ! dpkg --compare-versions "$(go env GOVERSION 2>/dev/null | sed 's/^go//')" ge "1.26"; then
+    echo "==> Installing Go toolchain (>= 1.26)..."
+    GOVER="1.26.1"
+    GOARCH_T="$(uname -m)"; case "$GOARCH_T" in aarch64|arm64) GOARCH_T=arm64 ;; *) GOARCH_T=amd64 ;; esac
+    curl -fsSL "https://go.dev/dl/go${GOVER}.linux-${GOARCH_T}.tar.gz" -o /tmp/go.tgz
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf /tmp/go.tgz
+    rm -f /tmp/go.tgz
+  fi
+  export PATH="$PATH:/usr/local/go/bin"
   if command -v go >/dev/null 2>&1; then
     echo "==> No prebuilt binary found, building from source..."
     (cd "$REPO_DIR" && go build -o bin/lxddash-linux ./cmd/server)
@@ -138,7 +157,6 @@ if [[ -z "$BINARY" ]]; then
   else
     echo "error: no prebuilt binary found and Go is not installed." >&2
     echo "  Build one on your dev machine with: make cross" >&2
-    echo "  or install Go: apt install golang-go" >&2
     exit 1
   fi
 fi
@@ -150,6 +168,15 @@ echo "==> Installing LXD Dash ($BINARY)..."
 install -d /usr/local/bin /etc/lxddash /var/lib/lxddash \
   /usr/share/lxddash/web /var/lib/vz/dump /var/lib/libvirt/images
 install -m 0755 "$BINARY" /usr/local/bin/lxddash
+
+# Frontend — build from source when dist is missing (needs Node.js 18+)
+if [[ ! -d "$REPO_DIR/web/dist" && -f "$REPO_DIR/web/package.json" ]]; then
+  echo "==> web/dist missing — building frontend..."
+  if ! command -v npm >/dev/null 2>&1; then
+    apt-get install -y nodejs npm >/dev/null
+  fi
+  (cd "$REPO_DIR/web" && npm install --no-audit --no-fund && npm run build)
+fi
 
 # Frontend (built web/dist) — required for the web UI
 if [[ -d "$REPO_DIR/web/dist" ]]; then

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -41,14 +42,14 @@ func qemuUptime(domainName string) time.Duration {
 			continue
 		}
 		cmd := strings.ReplaceAll(string(cmdline), "\x00", " ")
-		if !strings.Contains(cmd, "qemu-system") {
-			continue
+		// libvirt may invoke QEMU as qemu-system-x86_64 or as the Ubuntu
+		// "kvm" alias (argv[0]=/usr/bin/kvm); both pass -name guest=<dom>.
+		if strings.Contains(cmd, "-name guest="+domainName) {
+			return processUptime(pid)
 		}
-		// Match the domain name in the -name argument.
-		if !strings.Contains(cmd, domainName) {
-			continue
+		if strings.Contains(cmd, "qemu-system") && strings.Contains(cmd, domainName) {
+			return processUptime(pid)
 		}
-		return processUptime(pid)
 	}
 	return 0
 }
@@ -127,16 +128,26 @@ func (s *Service) Close() error {
 	return s.l.Disconnect()
 }
 
+// IfaceInfo describes one virtual NIC of a domain.
+type IfaceInfo struct {
+	Name    string `json:"name"`
+	MAC     string `json:"mac,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Network string `json:"network,omitempty"` // managed network or bridge name
+}
+
 // DomainInfo is a summary of a libvirt domain (VM).
 type DomainInfo struct {
-	UUID      string `json:"uuid"`
-	Name      string `json:"name"`
-	State     string `json:"state"`
-	VCPUs     uint32 `json:"vcpus"`
-	Memory    uint64 `json:"memory"`
-	VNC       int    `json:"vnc_port"`
-	Autostart bool   `json:"autostart"`
-	ISO       string `json:"iso,omitempty"` // currently attached CDROM ISO filename
+	UUID       string      `json:"uuid"`
+	Name       string      `json:"name"`
+	State      string      `json:"state"`
+	VCPUs      uint32      `json:"vcpus"`
+	Memory     uint64      `json:"memory"` // MB
+	VNC        int         `json:"vnc_port"`
+	Autostart  bool        `json:"autostart"`
+	ISO        string      `json:"iso,omitempty"` // currently attached CDROM ISO filename
+	Interfaces []IfaceInfo `json:"interfaces,omitempty"`
+	IP         string      `json:"ip,omitempty"` // IPv4 from DHCP lease (running VMs)
 }
 
 // DomainStat is a live resource snapshot for one VM.
@@ -167,6 +178,19 @@ func (s *Service) Stats(ctx context.Context) ([]DomainStat, error) {
 		out = append(out, st)
 	}
 	return out, nil
+}
+
+// Stat returns live resource stats for a single domain.
+func (s *Service) Stat(ctx context.Context, uuid string) (*DomainStat, error) {
+	d, err := s.domainByUUID(uuid)
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.domainStat(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
 }
 
 func (s *Service) domainStat(ctx context.Context, d libvirt.Domain) (DomainStat, error) {
@@ -248,6 +272,21 @@ func (s *Service) domainInfo(ctx context.Context, d libvirt.Domain) (DomainInfo,
 					File string `xml:"file,attr"`
 				} `xml:"source"`
 			} `xml:"disk"`
+			Interfaces []struct {
+				MAC struct {
+					Address string `xml:"address,attr"`
+				} `xml:"mac"`
+				Model struct {
+					Type string `xml:"type,attr"`
+				} `xml:"model"`
+				Source struct {
+					Network string `xml:"network,attr"`
+					Bridge  string `xml:"bridge,attr"`
+				} `xml:"source"`
+				Target struct {
+					Dev string `xml:"dev,attr"`
+				} `xml:"target"`
+			} `xml:"interface"`
 		} `xml:"devices"`
 	}
 	if err := xml.Unmarshal([]byte(xmlDesc), &domXML); err != nil {
@@ -271,15 +310,43 @@ func (s *Service) domainInfo(ctx context.Context, d libvirt.Domain) (DomainInfo,
 	if err != nil {
 		autostart = 0
 	}
+	// Network interfaces from the domain config (MAC/model/bridge are
+	// static config — known even when the VM is stopped).
+	ifaces := make([]IfaceInfo, 0, len(domXML.Devices.Interfaces))
+	for i, iface := range domXML.Devices.Interfaces {
+		name := iface.Target.Dev
+		if name == "" {
+			name = fmt.Sprintf("iface%d", i)
+		}
+		network := iface.Source.Network
+		if network == "" {
+			network = iface.Source.Bridge
+		}
+		ifaces = append(ifaces, IfaceInfo{
+			Name:    name,
+			MAC:     iface.MAC.Address,
+			Model:   iface.Model.Type,
+			Network: network,
+		})
+	}
+	// Best-effort IPv4 from the libvirt DHCP lease table (running VMs only).
+	ip := ""
+	if stateString(libvirt.DomainState(state)) == "running" {
+		if addr, err := s.IPAddress(ctx, domXML.UUID); err == nil {
+			ip = addr
+		}
+	}
 	return DomainInfo{
-		UUID:      domXML.UUID,
-		Name:      d.Name,
-		State:     stateString(libvirt.DomainState(state)),
-		VCPUs:     domXML.VCPU,
-		Memory:    domXML.Memory * 1024, // libvirt returns KiB, convert to bytes
-		VNC:       vnc,
-		Autostart: autostart == 1,
-		ISO:       iso,
+		UUID:       domXML.UUID,
+		Name:       d.Name,
+		State:      stateString(libvirt.DomainState(state)),
+		VCPUs:      domXML.VCPU,
+		Memory:     domXML.Memory / 1024, // libvirt XML memory is KiB; expose MB (frontend fmtMem expects MB)
+		VNC:        vnc,
+		Autostart:  autostart == 1,
+		ISO:        iso,
+		Interfaces: ifaces,
+		IP:         ip,
 	}, nil
 }
 
@@ -516,6 +583,27 @@ func (s *Service) ConsoleName(ctx context.Context, uuid string) (string, error) 
 		return "", err
 	}
 	return d.Name, nil
+}
+
+// IPAddress returns the VM's IPv4 address from the libvirt DHCP lease
+// table (works on NAT networks without a guest agent). Empty error when
+// the VM is stopped or has no lease.
+func (s *Service) IPAddress(ctx context.Context, uuid string) (string, error) {
+	name, err := s.ConsoleName(ctx, uuid)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "virsh", "domifaddr", name, "--source", "lease")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("virsh domifaddr: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	// Example row: vnet0  52:54:00:13:28:e5  ipv4  192.168.122.157/24
+	re := regexp.MustCompile(`\b(\d{1,3}(?:\.\d{1,3}){3})/\d+\b`)
+	if m := re.FindStringSubmatch(string(out)); m != nil {
+		return m[1], nil
+	}
+	return "", fmt.Errorf("no DHCP lease found for %s (is the VM running?)", name)
 }
 
 // DefineXML defines a new domain from XML (used by Proxmox VM imports).

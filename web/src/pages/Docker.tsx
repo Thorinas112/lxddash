@@ -5,6 +5,7 @@ import AssistModal from '../components/AssistModal'
 import Badge from '../components/Badge'
 import LiveGraphsModal from '../components/LiveGraphsModal'
 import Modal from '../components/Modal'
+import { confirm, promptInline } from '../components/ConfirmDialog'
 import Spinner from '../components/Spinner'
 import Wizard from '../components/Wizard'
 import { btnAction, btnGhost, btnPrimary, inputCls } from '../components/ui'
@@ -41,6 +42,9 @@ export default function Docker() {
   const [logsId, setLogsId] = useState<string | null>(null)
   const [logs, setLogs] = useState('')
   const [graphsFor, setGraphsFor] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState('')
+  const [containerTags, setContainerTags] = useState<Record<string, string[]>>({})
   const navigate = useNavigate()
 
   const load = useCallback(async () => {
@@ -64,6 +68,15 @@ export default function Docker() {
     } catch (e: any) {
       setError(e.message)
     }
+    // Load tags for all containers.
+    try {
+      const cs = await api.docker.containers()
+      const tagMap: Record<string, string[]> = {}
+      await Promise.all(cs.map(async (c: any) => {
+        try { tagMap[c.Id] = await api.tags.get(c.Id) } catch { tagMap[c.Id] = [] }
+      }))
+      setContainerTags(tagMap)
+    } catch { /* ignore */ }
   }, [])
 
   // Poll live container stats every 3s.
@@ -165,10 +178,24 @@ export default function Docker() {
       </div>
 
       {tab === 'containers' && (
+      <div>
+        {selected.size > 0 && (
+          <div className="mb-3 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
+            <span className="text-xs text-blue-700">{selected.size} selected</span>
+            <button disabled={!!bulkBusy} onClick={async () => { setBulkBusy('start'); try { await api.docker.bulkAction([...selected], 'start') } finally { setBulkBusy(''); setSelected(new Set()); load() } }} className={btnAction('bg-green-100 text-green-700')}>{bulkBusy === 'start' ? '…' : 'Start'}</button>
+            <button disabled={!!bulkBusy} onClick={async () => { setBulkBusy('stop'); try { await api.docker.bulkAction([...selected], 'stop') } finally { setBulkBusy(''); setSelected(new Set()); load() } }} className={btnAction('bg-amber-100 text-amber-700')}>{bulkBusy === 'stop' ? '…' : 'Stop'}</button>
+            <button disabled={!!bulkBusy} onClick={async () => { setBulkBusy('restart'); try { await api.docker.bulkAction([...selected], 'restart') } finally { setBulkBusy(''); setSelected(new Set()); load() } }} className={btnAction('bg-blue-100 text-blue-700')}>{bulkBusy === 'restart' ? '…' : 'Restart'}</button>
+            <button disabled={!!bulkBusy} onClick={async () => { if (await confirm(`Remove ${selected.size} containers?`)) { setBulkBusy('remove'); try { await api.docker.bulkAction([...selected], 'remove') } finally { setBulkBusy(''); setSelected(new Set()); load() } } }} className={btnAction('bg-red-100 text-red-700')}>{bulkBusy === 'remove' ? '…' : 'Remove'}</button>
+            <button onClick={() => setSelected(new Set())} className={btnAction('bg-gray-100 text-gray-700')}>Clear</button>
+          </div>
+        )}
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
         <table className="w-full text-sm">
           <thead className="bg-panel2 text-left text-xs uppercase tracking-wide text-gray-500">
             <tr>
+              <th className="px-4 py-3 w-8">
+                <input type="checkbox" checked={containers.length > 0 && containers.every(c => selected.has(c.Id))} onChange={e => { if (e.target.checked) setSelected(new Set(containers.map(c => c.Id))); else setSelected(new Set()) }} className="h-3.5 w-3.5 rounded border-gray-300" />
+              </th>
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Image</th>
               <th className="px-4 py-3">Status</th>
@@ -176,6 +203,7 @@ export default function Docker() {
               <th className="px-4 py-3">CPU</th>
               <th className="px-4 py-3">Memory</th>
               <th className="px-4 py-3">Ports</th>
+              <th className="px-4 py-3">Tags</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
@@ -184,6 +212,9 @@ export default function Docker() {
               const st = stats[c.Id]
               return (
               <tr key={c.Id} className="bg-white hover:bg-gray-50">
+                <td className="px-4 py-3 w-8">
+                  <input type="checkbox" checked={selected.has(c.Id)} onChange={e => { const next = new Set(selected); if (e.target.checked) next.add(c.Id); else next.delete(c.Id); setSelected(next) }} className="h-3.5 w-3.5 rounded border-gray-300" />
+                </td>
                 <td className="px-4 py-3 font-medium text-gray-900">
                   <Link to={`/docker/${c.Id}`} className="text-blue-600 hover:underline">
                     {c.Names[0]?.replace(/^\//, '') || c.Id.slice(0, 12)}
@@ -242,6 +273,23 @@ export default function Docker() {
                     </span>
                   ))}
                 </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1">
+                    {(containerTags[c.Id] || []).map((t) => (
+                      <span key={t} className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">{t}</span>
+                    ))}
+                    <button
+                      onClick={async () => {
+                        const input = await promptInline('Tags (comma-separated):')
+                        if (input === null) return
+                        const tags = input.split(',').map(s => s.trim()).filter(Boolean)
+                        await api.tags.set(c.Id, tags)
+                        setContainerTags(prev => ({ ...prev, [c.Id]: tags }))
+                      }}
+                      className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 hover:bg-gray-200"
+                    >+</button>
+                  </div>
+                </td>
                 <td className="px-4 py-3 text-right">
                   {busy === c.Id ? (
                     <Spinner />
@@ -291,14 +339,17 @@ export default function Docker() {
           </tbody>
         </table>
       </div>
+      </div>
       )}
 
       {tab === 'images' && (
         <>
         <div className="mb-3 flex justify-end">
           <button
+            disabled={!!busy}
             onClick={async () => {
-              if (!window.confirm('Remove all unused images? This cannot be undone.')) return
+              if (!(await confirm('Remove all unused images? This cannot be undone.'))) return
+              setBusy('prune')
               try {
                 const res = await api.docker.pruneImages()
                 const count = res.images_deleted ?? 0
@@ -313,11 +364,13 @@ export default function Docker() {
                 await load()
               } catch (e: any) {
                 setError(e.message)
+              } finally {
+                setBusy('')
               }
             }}
             className="rounded bg-amber-100 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-200"
           >
-            Prune unused images
+            {busy === 'prune' ? 'Pruning…' : 'Prune unused images'}
           </button>
         </div>
         <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
@@ -346,18 +399,22 @@ export default function Docker() {
                   <td className="px-4 py-3 text-gray-600">{fmtBytes(img.Size)}</td>
                   <td className="px-4 py-3 text-right">
                     <button
+                      disabled={!!busy}
                       onClick={async () => {
-                        if (!window.confirm(`Delete image ${img.RepoTags?.[0] || img.Id}?`)) return
+                        if (!(await confirm(`Delete image ${img.RepoTags?.[0] || img.Id}?`))) return
+                        setBusy(img.Id)
                         try {
                           await api.docker.removeImage(img.Id)
                           await load()
                         } catch (e: any) {
                           setError(e.message)
+                        } finally {
+                          setBusy('')
                         }
                       }}
                       className={btnAction('bg-red-100 text-red-700')}
                     >
-                      Delete
+                      {busy === img.Id ? '…' : 'Delete'}
                     </button>
                   </td>
                 </tr>
@@ -394,18 +451,22 @@ export default function Docker() {
                   <td className="px-4 py-3 font-mono text-xs text-gray-500">{v.Mountpoint}</td>
                   <td className="px-4 py-3 text-right">
                     <button
+                      disabled={!!busy}
                       onClick={async () => {
-                        if (!window.confirm(`Delete volume ${v.Name}?`)) return
+                        if (!(await confirm(`Delete volume ${v.Name}?`))) return
+                        setBusy(v.Name)
                         try {
                           await api.docker.removeVolume(v.Name)
                           await load()
                         } catch (e: any) {
                           setError(e.message)
+                        } finally {
+                          setBusy('')
                         }
                       }}
                       className={btnAction('bg-red-100 text-red-700')}
                     >
-                      Delete
+                      {busy === v.Name ? '…' : 'Delete'}
                     </button>
                   </td>
                 </tr>
@@ -447,18 +508,22 @@ export default function Docker() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <button
+                      disabled={!!busy}
                       onClick={async () => {
-                        if (!window.confirm(`Delete network ${n.Name}?`)) return
+                        if (!(await confirm(`Delete network ${n.Name}?`))) return
+                        setBusy(n.Id)
                         try {
                           await api.docker.removeNetwork(n.Id)
                           await load()
                         } catch (e: any) {
                           setError(e.message)
+                        } finally {
+                          setBusy('')
                         }
                       }}
                       className={btnAction('bg-red-100 text-red-700')}
                     >
-                      Delete
+                      {busy === n.Id ? '…' : 'Delete'}
                     </button>
                   </td>
                 </tr>
@@ -713,89 +778,69 @@ function ReviewRow({ k, v }: { k: string; v: string }) {
 }
 
 function ComposeModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [dir, setDir] = useState('')
+  const [yaml, setYaml] = useState('')
+  const [dir, setDir] = useState('/tmp')
+  const [deployName, setDeployName] = useState('lxddash-deploy')
   const [output, setOutput] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
 
-  async function run(action: 'up' | 'down' | 'pull' | 'ps') {
-    if (!dir) {
-      setError('Directory is required')
-      return
-    }
-    setBusy(action)
-    setError('')
-    setOutput('')
+  async function deploy() {
+    if (!yaml.trim()) { setError('YAML is required'); return }
+    setBusy('deploy'); setError(''); setOutput('')
+    try {
+      const res = await api.docker.composeDeploy(yaml, deployName)
+      setOutput(res.output || 'Deployed successfully')
+      onDone()
+    } catch (e: any) { setError(e.message) } finally { setBusy('') }
+  }
+
+  async function runDir(action: 'up' | 'down' | 'pull' | 'ps') {
+    if (!dir) { setError('Directory is required'); return }
+    setBusy(action); setError(''); setOutput('')
     try {
       const res = await api.docker.compose(action, dir)
       setOutput(res.output || '(no output)')
       if (action === 'up' || action === 'down') onDone()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setBusy('')
-    }
+    } catch (e: any) { setError(e.message) } finally { setBusy('') }
   }
 
   return (
     <Modal title="Docker Compose" onClose={onClose}>
       <div className="space-y-3">
-        <Field label="Compose project directory *">
-          <input
-            value={dir}
-            onChange={(e) => setDir(e.target.value)}
-            placeholder="/opt/my-app"
-            className={inputCls}
+        {/* YAML editor tab */}
+        <div className="rounded border border-gray-200 bg-gray-50 p-3">
+          <div className="mb-2 text-xs font-medium text-gray-600">Compose YAML</div>
+          <textarea
+            value={yaml}
+            onChange={(e) => setYaml(e.target.value)}
+            placeholder={'version: "3"\nservices:\n  web:\n    image: nginx:alpine\n    ports:\n      - "8080:80"'}
+            className="w-full rounded border border-gray-300 bg-white p-2 font-mono text-xs text-gray-900 focus:border-blue-500 focus:outline-none"
+            rows={10}
+            spellCheck={false}
           />
-          <p className="mt-1 text-xs text-gray-500">
-            Directory containing docker-compose.yml on the host.
-          </p>
-        </Field>
-        <div className="flex gap-2">
-          <button
-            onClick={() => run('up')}
-            disabled={busy !== ''}
-            className={btnAction('bg-green-100 text-green-700')}
-          >
-            {busy === 'up' ? '…' : 'Up -d'}
-          </button>
-          <button
-            onClick={() => run('down')}
-            disabled={busy !== ''}
-            className={btnAction('bg-red-100 text-red-700')}
-          >
-            {busy === 'down' ? '…' : 'Down'}
-          </button>
-          <button
-            onClick={() => run('pull')}
-            disabled={busy !== ''}
-            className={btnAction('bg-blue-100 text-blue-700')}
-          >
-            {busy === 'pull' ? '…' : 'Pull'}
-          </button>
-          <button
-            onClick={() => run('ps')}
-            disabled={busy !== ''}
-            className={btnAction('bg-gray-100 text-gray-600')}
-          >
-            {busy === 'ps' ? '…' : 'PS'}
-          </button>
-        </div>
-        {error && (
-          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
-            {error}
+          <div className="mt-2 flex items-center gap-2">
+            <input value={deployName} onChange={e => setDeployName(e.target.value)} placeholder="project name" className="w-40 rounded border border-gray-300 px-2 py-1 text-xs" />
+            <button onClick={deploy} disabled={!!busy} className={btnAction('bg-green-100 text-green-700')}>
+              {busy === 'deploy' ? '… Deploying' : 'Deploy'}
+            </button>
           </div>
-        )}
-        {output && (
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/50 p-3 text-xs text-green-300">
-            {output}
-          </pre>
-        )}
-        <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className={btnGhost}>
-            Close
-          </button>
         </div>
+
+        {/* Directory-based tab */}
+        <div className="border-t border-gray-200 pt-3">
+          <div className="mb-2 text-xs font-medium text-gray-600">Or use existing project directory</div>
+          <div className="flex items-center gap-2">
+            <input value={dir} onChange={e => setDir(e.target.value)} placeholder="/opt/my-app" className={`${inputCls} flex-1`} />
+            <button onClick={() => runDir('up')} disabled={!!busy} className={btnAction('bg-green-100 text-green-700')}>{busy === 'up' ? '…' : 'Up'}</button>
+            <button onClick={() => runDir('down')} disabled={!!busy} className={btnAction('bg-red-100 text-red-700')}>{busy === 'down' ? '…' : 'Down'}</button>
+            <button onClick={() => runDir('ps')} disabled={!!busy} className={btnAction('bg-gray-100 text-gray-600')}>{busy === 'ps' ? '…' : 'PS'}</button>
+          </div>
+        </div>
+
+        {error && <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>}
+        {output && <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/50 p-3 text-xs text-green-300">{output}</pre>}
+        <div className="flex justify-end pt-2"><button onClick={onClose} className={btnGhost}>Close</button></div>
       </div>
     </Modal>
   )

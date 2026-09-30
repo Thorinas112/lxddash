@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { confirm } from '../components/ConfirmDialog'
 import AssistModal from '../components/AssistModal'
 import Wizard from '../components/Wizard'
 
@@ -49,7 +50,7 @@ export default function Firewall() {
   }, [load])
 
   async function del(name: string) {
-    if (!window.confirm(`Delete firewall ACL ${name}?`)) return
+    if (!(await confirm(`Delete firewall ACL ${name}?`))) return
     setBusy(name)
     try {
       await api.lxd.deleteAcl(name)

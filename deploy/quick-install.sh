@@ -3,14 +3,13 @@
 # LXD Dash — one-liner installer for fresh Ubuntu/Debian servers
 #
 # Usage:
-#   curl -sL https://raw.githubusercontent.com/YOUR_ORG/lxddash/main/deploy/quick-install.sh | sudo bash
+#   curl -sL https://raw.githubusercontent.com/Thorinas112/lxddash/master/deploy/quick-install.sh | sudo bash
 #
 # What this does:
-#   1. Installs Docker, LXD (snap), libvirt, qemu-kvm
-#   2. Downloads the latest LXD Dash release binary
-#   3. Installs the frontend + backend
-#   4. Creates a systemd service
-#   5. Prints the admin password
+#   1. Installs Docker, LXD (snap), libvirt/qemu-kvm + tools
+#   2. Fetches LXD Dash — GitHub release assets when available, otherwise a
+#      shallow git clone built from source (Go toolchain auto-installed)
+#   3. Delegates to deploy/install.sh for install + config + systemd
 #
 set -euo pipefail
 
@@ -57,7 +56,7 @@ echo ""
 log "Installing system dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y curl ca-certificates jq
+apt-get install -y curl ca-certificates git jq tar
 
 # Docker
 if ! command -v docker >/dev/null 2>&1; then
@@ -89,129 +88,40 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Download or locate the binary
 # ---------------------------------------------------------------------------
-BINARY=""
-for candidate in "$PWD/bin/lxddash-linux" "$PWD/bin/lxddash"; do
-  if [[ -x "$candidate" ]]; then
-    BINARY="$candidate"
-    break
-  fi
-done
-
-if [[ -z "$BINARY" && "$VERSION" != "dev" ]]; then
-  log "Downloading LXD Dash $VERSION..."
+SRC_DIR="/tmp/lxddash-src"
+rm -rf "$SRC_DIR"
+FETCHED=0
+if [[ "$VERSION" != "dev" ]]; then
+  log "Trying release assets ($VERSION)..."
   ARCH="$(uname -m)"
   case "$ARCH" in
     x86_64)  ARCH="amd64" ;;
     aarch64) ARCH="arm64" ;;
-    *)       die "Unsupported architecture: $ARCH" ;;
+    *)       ARCH="amd64" ;;
   esac
-
   if [[ "$VERSION" == "latest" ]]; then
-    DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/lxddash-linux-${ARCH}"
+    BASE="https://github.com/$REPO/releases/latest/download"
   else
-    DOWNLOAD_URL="https://github.com/$REPO/releases/download/${VERSION}/lxddash-linux-${ARCH}"
+    BASE="https://github.com/$REPO/releases/download/${VERSION}"
   fi
-
-  mkdir -p "$INSTALL_DIR"
-  curl -sL "$DOWNLOAD_URL" -o "$INSTALL_DIR/lxddash" || die "Download failed: $DOWNLOAD_URL"
-  chmod +x "$INSTALL_DIR/lxddash"
-  BINARY="$INSTALL_DIR/lxddash"
-fi
-
-if [[ -z "$BINARY" ]]; then
-  die "No binary found. Build with 'make cross' or set LXDDASH_VERSION."
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Install
-# ---------------------------------------------------------------------------
-log "Installing LXD Dash..."
-mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR" "$WEB_DIR" /var/lib/vz/dump /var/lib/libvirt/images
-install -m 0755 "$BINARY" "$INSTALL_DIR/lxddash"
-
-# Frontend — check common locations
-for dist in "$PWD/web/dist" "/tmp/lxddash-web/dist"; do
-  if [[ -d "$dist" ]]; then
-    cp -r "$dist/." "$WEB_DIR/"
-    log "Installed frontend from $dist"
-    break
+  mkdir -p "$SRC_DIR/bin" "$SRC_DIR/web"
+  if curl -fsSL "$BASE/lxddash-linux-${ARCH}" -o "$SRC_DIR/bin/lxddash-linux" \
+     && curl -fsSL "$BASE/lxddash-web.tar.gz" -o "$SRC_DIR/web-dist.tar.gz"; then
+    mkdir -p "$SRC_DIR/web/dist"
+    tar -xzf "$SRC_DIR/web-dist.tar.gz" -C "$SRC_DIR/web/dist"
+    rm -f "$SRC_DIR/web-dist.tar.gz"
+    chmod +x "$SRC_DIR/bin/lxddash-linux"
+    FETCHED=1
+    log "Release assets downloaded"
+  else
+    rm -rf "$SRC_DIR"
+    warn "Release assets unavailable — falling back to a git clone + source build"
   fi
-done
-
-# Detect LXD socket
-LXD_SOCKET="/var/lib/lxd/unix.socket"
-if [[ -S /var/snap/lxd/common/lxd/unix.socket ]]; then
-  LXD_SOCKET="/var/snap/lxd/common/lxd/unix.socket"
-  log "Detected snap LXD socket"
+fi
+if [[ $FETCHED -eq 0 ]]; then
+  log "Cloning https://github.com/$REPO.git (master)..."
+  git clone --depth 1 "https://github.com/$REPO.git" "$SRC_DIR"
 fi
 
-# Config
-if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
-  cat > "$CONFIG_DIR/config.json" <<EOF
-{
-  "listen_addr": ":$PORT",
-  "data_dir": "$DATA_DIR",
-  "static_dir": "$WEB_DIR",
-  "lxd_unix_socket": "$LXD_SOCKET",
-  "libvirt_uri": "qemu:///system",
-  "proxmox_dump_dir": "/var/lib/vz/dump",
-  "proxmox_staging": "$DATA_DIR/staging",
-  "vm_image_dir": "/var/lib/libvirt/images"
-}
-EOF
-  log "Wrote $CONFIG_DIR/config.json"
-else
-  log "Keeping existing config"
-fi
-
-# Sudoers for updates page
-SUDOERS="/etc/sudoers.d/lxddash"
-if [[ ! -f "$SUDOERS" ]]; then
-  cat > "$SUDOERS" <<EOF
-# LXD Dash — allow software updates from the web UI
-$REAL_USER ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/apt-get, /usr/bin/dnf
-EOF
-  chmod 0440 "$SUDOERS"
-  log "Wrote $SUDOERS"
-fi
-
-# systemd
-cat > /etc/systemd/system/lxddash.service <<'EOF'
-[Unit]
-Description=LXD Dash - server management dashboard
-After=network-online.target lxd.service libvirtd.service docker.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/lxddash -config /etc/lxddash/config.json
-Restart=on-failure
-RestartSec=5
-SupplementaryGroups=docker lxd libvirt
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable --now lxddash
-
-# ---------------------------------------------------------------------------
-# 4. Done
-# ---------------------------------------------------------------------------
-sleep 2
-if systemctl is-active --quiet lxddash; then
-  IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  echo ""
-  echo "============================================================"
-  echo -e " ${BOLD}LXD Dash installed and running!${RESET}"
-  echo ""
-  echo "   URL:      http://${IP:-<server-ip>}:$PORT"
-  echo "   First run: the browser will ask you to create the admin"
-  echo "              account (username + password)"
-  echo "   Logs:     journalctl -u lxddash -f"
-  echo "   Config:   $CONFIG_DIR/config.json"
-  echo "   Uninstall: sudo systemctl stop lxddash && sudo rm -f /etc/systemd/system/lxddash.service && sudo rm -f $INSTALL_DIR/lxddash"
-  echo "============================================================"
-else
-  die "The lxddash service failed to start. Check: journalctl -u lxddash -n 50"
-fi
+log "Running deploy/install.sh (install + config + systemd)..."
+bash "$SRC_DIR/deploy/install.sh" --port "$PORT"

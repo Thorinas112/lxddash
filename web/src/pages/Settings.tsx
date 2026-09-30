@@ -1,4 +1,5 @@
 import { ReactNode, useCallback, useEffect, useState } from 'react'
+import { confirm } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 
 export default function Settings() {
@@ -128,7 +129,7 @@ export default function Settings() {
   }
 
   async function runUpgrade() {
-    if (!window.confirm('Apply all pending OS package upgrades? This may take a while.')) return
+    if (!(await confirm('Apply all pending OS package upgrades? This may take a while.'))) return
     setUpdating(true)
     setUpdateOut('')
     try {
@@ -440,16 +441,16 @@ export default function Settings() {
           </p>
           <div className="flex gap-2">
             <button
-              onClick={() => {
-                if (window.confirm('Reboot the host now?')) api.host.power('reboot')
+              onClick={async () => {
+                if (await confirm('Reboot the host now?')) api.host.power('reboot')
               }}
               className="rounded bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500"
             >
               Reboot host
             </button>
             <button
-              onClick={() => {
-                if (window.confirm('Shut down the host now?')) api.host.power('poweroff')
+              onClick={async () => {
+                if (await confirm('Shut down the host now?')) api.host.power('poweroff')
               }}
               className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
             >

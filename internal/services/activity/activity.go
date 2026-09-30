@@ -1,6 +1,9 @@
 package activity
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -16,19 +19,68 @@ type Entry struct {
 	Status    string    `json:"status"` // ok | error
 }
 
-// Service keeps an in-memory ring buffer of recent activity.
+// Service keeps a ring buffer of recent activity, persisted to
+// dataDir/activity.json so the log survives server restarts.
 type Service struct {
 	mu      sync.Mutex
 	entries []Entry
 	nextID  int64
 	max     int
+	path    string
 }
 
-func New(max int) *Service {
+func New(max int, dataDir string) *Service {
 	if max <= 0 {
 		max = 500
 	}
-	return &Service{max: max}
+	s := &Service{max: max}
+	if dataDir != "" {
+		s.path = filepath.Join(dataDir, "activity.json")
+		s.load()
+	}
+	return s
+}
+
+// persisted is the on-disk JSON shape.
+type persisted struct {
+	NextID int64   `json:"next_id"`
+	Items  []Entry `json:"items"`
+}
+
+// load restores the buffer from disk (best-effort).
+func (s *Service) load() {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return
+	}
+	var p persisted
+	if json.Unmarshal(data, &p) != nil {
+		return
+	}
+	s.entries = p.Items
+	s.nextID = p.NextID
+	if s.nextID == 0 {
+		for _, e := range s.entries {
+			if e.ID > s.nextID {
+				s.nextID = e.ID
+			}
+		}
+	}
+	if len(s.entries) > s.max {
+		s.entries = s.entries[len(s.entries)-s.max:]
+	}
+}
+
+// saveLocked writes the buffer to disk. Caller must hold s.mu.
+func (s *Service) saveLocked() {
+	if s.path == "" {
+		return
+	}
+	data, err := json.MarshalIndent(persisted{NextID: s.nextID, Items: s.entries}, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(s.path, data, 0o600)
 }
 
 // Log appends an entry, trimming the oldest when over capacity.
@@ -48,6 +100,7 @@ func (s *Service) Log(category, action, target, message, status string) {
 	if len(s.entries) > s.max {
 		s.entries = s.entries[len(s.entries)-s.max:]
 	}
+	s.saveLocked()
 }
 
 // List returns entries, newest first, optionally filtered by category.
