@@ -62,6 +62,20 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Progress helpers: numbered phase banners with per-step + total timing.
+STEP=0
+LAST_T=0
+step() {
+  STEP=$((STEP + 1))
+  echo ""
+  if [[ $STEP -eq 1 ]]; then
+    echo "==> [1/6] $*"
+  else
+    echo "==> [$STEP/6] $*  (previous step: $((SECONDS - LAST_T))s)"
+  fi
+  LAST_T=$SECONDS
+}
+
 # ---------------------------------------------------------------------------
 # 0. Prerequisites
 # ---------------------------------------------------------------------------
@@ -84,7 +98,7 @@ fi
 # 1. System dependencies
 # ---------------------------------------------------------------------------
 if [[ $SKIP_DEPS -eq 0 ]]; then
-  echo "==> Installing system dependencies..."
+  step "Installing system dependencies (apt)..."
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   # qemu-kvm is a virtual package on newer Ubuntu — request qemu-system-x86 explicitly
@@ -128,8 +142,12 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
   fi
 
   # Start services
+  step "Starting runtime services (libvirtd, docker, snap lxd)..."
   systemctl enable --now libvirtd 2>/dev/null || true
   systemctl enable --now docker 2>/dev/null || true
+else
+  step "System dependencies — skipped (--skip-deps)"
+  step "Runtime services — skipped (--skip-deps)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -152,40 +170,48 @@ if [[ -n "$BINARY" && -d "$REPO_DIR/internal" ]]; then
   fi
 fi
 
-if [[ -z "$BINARY" ]]; then
+if [[ -n "$BINARY" ]]; then
+  step "Go toolchain — not needed (prebuilt binary found)"
+  step "Backend binary — reusing $(basename "$BINARY")"
+else
+  step "Go toolchain (>= 1.26)..."
   # Building from source needs Go >= 1.26 (Incus client requirement);
   # bootstrap the official toolchain if missing or too old.
   if ! command -v go >/dev/null 2>&1 || ! dpkg --compare-versions "$(go env GOVERSION 2>/dev/null | sed 's/^go//')" ge "1.26"; then
     # Reuse a previously bootstrapped toolchain (sudo's secure_path does not
     # include /usr/local/go/bin, so `go` looks missing on every run).
     if [[ -x /usr/local/go/bin/go ]] && dpkg --compare-versions "$(/usr/local/go/bin/go env GOVERSION 2>/dev/null | sed 's/^go//')" ge "1.26"; then
-      echo "==> Using existing Go toolchain at /usr/local/go"
+      echo "    using existing toolchain at /usr/local/go"
     else
-      echo "==> Installing Go toolchain (>= 1.26)..."
       GOVER="1.26.1"
       GOARCH_T="$(uname -m)"; case "$GOARCH_T" in aarch64|arm64) GOARCH_T=arm64 ;; *) GOARCH_T=amd64 ;; esac
-      curl -fsSL "https://go.dev/dl/go${GOVER}.linux-${GOARCH_T}.tar.gz" -o /tmp/go.tgz
+      echo "    downloading Go ${GOVER} (~78 MB) — progress bar below"
+      curl -fL --progress-bar "https://go.dev/dl/go${GOVER}.linux-${GOARCH_T}.tar.gz" -o /tmp/go.tgz
+      echo "    extracting to /usr/local/go..."
       rm -rf /usr/local/go
       tar -C /usr/local -xzf /tmp/go.tgz
       rm -f /tmp/go.tgz
     fi
+  else
+    echo "    $(go version 2>/dev/null || echo 'go') already available"
   fi
   export PATH="$PATH:/usr/local/go/bin"
-  if command -v go >/dev/null 2>&1; then
-    echo "==> No prebuilt binary found, building from source..."
-    (cd "$REPO_DIR" && go build -o bin/lxddash-linux ./cmd/server)
-    BINARY="$REPO_DIR/bin/lxddash-linux"
-  else
-    echo "error: no prebuilt binary found and Go is not installed." >&2
+  if ! command -v go >/dev/null 2>&1; then
+    echo "error: no prebuilt binary found and Go could not be installed." >&2
     echo "  Build one on your dev machine with: make cross" >&2
     exit 1
   fi
+  step "Compiling backend from source (about a minute)..."
+  (cd "$REPO_DIR" && go build -o bin/lxddash-linux ./cmd/server)
+  BINARY="$REPO_DIR/bin/lxddash-linux"
+  echo "    built $(basename "$BINARY")"
 fi
 
 # ---------------------------------------------------------------------------
 # 3. Install files
 # ---------------------------------------------------------------------------
-echo "==> Installing LXD Dash ($BINARY)..."
+step "Installing binary and frontend assets..."
+echo "    backend: $BINARY"
 install -d /usr/local/bin /etc/lxddash /var/lib/lxddash \
   /usr/share/lxddash/web /var/lib/vz/dump /var/lib/libvirt/images
 install -m 0755 "$BINARY" /usr/local/bin/lxddash
@@ -201,11 +227,14 @@ if [[ -f "$REPO_DIR/web/package.json" ]]; then
   fi
 fi
 if [[ $NEED_WEB_BUILD -eq 1 ]]; then
-  echo "==> Building frontend (missing or older than web/src)..."
+  echo "==> building frontend — npm install + vite can take a few minutes..."
   if ! command -v npm >/dev/null 2>&1; then
     apt-get install -y nodejs npm >/dev/null
   fi
   (cd "$REPO_DIR/web" && npm install --no-audit --no-fund && npm run build)
+  echo "    frontend built in $((SECONDS - LAST_T))s"
+else
+  echo "    frontend: using existing web/dist"
 fi
 
 # Frontend (built web/dist) — required for the web UI
@@ -216,6 +245,7 @@ else
   echo "  Build it with: cd web && npm install && npm run build" >&2
 fi
 
+step "Configuring and starting the service..."
 # Wait for runtime sockets so the app doesn't start against services that
 # are still initialising (snap LXD in particular takes a few seconds) —
 # detection below and the app's eager connections both depend on this.
@@ -292,6 +322,7 @@ if systemctl is-active --quiet lxddash; then
   echo
   echo "============================================================"
   echo " LXD Dash installed and running!"
+  echo "   Duration:  ${SECONDS}s total"
   echo "   URL:      http://${IP:-<server-ip>}:$PORT"
   echo "   First run: the browser will ask you to create the admin"
   echo "              account (username + password)"
