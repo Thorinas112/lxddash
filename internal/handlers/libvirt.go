@@ -162,10 +162,12 @@ func (h *Handlers) VM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handlers) VMStart(w http.ResponseWriter, r *http.Request)     { h.vmAction(w, r, "start") }
-func (h *Handlers) VMShutdown(w http.ResponseWriter, r *http.Request)  { h.vmAction(w, r, "shutdown") }
-func (h *Handlers) VMReboot(w http.ResponseWriter, r *http.Request)    { h.vmAction(w, r, "reboot") }
-func (h *Handlers) VMForceStop(w http.ResponseWriter, r *http.Request) { h.vmAction(w, r, "force-stop") }
+func (h *Handlers) VMStart(w http.ResponseWriter, r *http.Request)    { h.vmAction(w, r, "start") }
+func (h *Handlers) VMShutdown(w http.ResponseWriter, r *http.Request) { h.vmAction(w, r, "shutdown") }
+func (h *Handlers) VMReboot(w http.ResponseWriter, r *http.Request)   { h.vmAction(w, r, "reboot") }
+func (h *Handlers) VMForceStop(w http.ResponseWriter, r *http.Request) {
+	h.vmAction(w, r, "force-stop")
+}
 
 func (h *Handlers) vmAction(w http.ResponseWriter, r *http.Request, action string) {
 	if h.deps.Libvirt == nil {

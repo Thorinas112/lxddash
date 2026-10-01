@@ -152,15 +152,15 @@ type DomainInfo struct {
 
 // DomainStat is a live resource snapshot for one VM.
 type DomainStat struct {
-	UUID        string  `json:"uuid"`
-	Name        string  `json:"name"`
-	State       string  `json:"state"`
-	VCPUs       uint32  `json:"vcpus"`
-	CPUTime     uint64  `json:"cpu_time"`     // nanoseconds of CPU time
-	MemUsage    uint64  `json:"mem_usage"`    // bytes currently used
-	MemLimit    uint64  `json:"mem_limit"`    // bytes configured (max)
-	MemPercent  float64 `json:"mem_percent"`
-	Uptime      int64   `json:"uptime_seconds"`
+	UUID       string  `json:"uuid"`
+	Name       string  `json:"name"`
+	State      string  `json:"state"`
+	VCPUs      uint32  `json:"vcpus"`
+	CPUTime    uint64  `json:"cpu_time"`  // nanoseconds of CPU time
+	MemUsage   uint64  `json:"mem_usage"` // bytes currently used
+	MemLimit   uint64  `json:"mem_limit"` // bytes configured (max)
+	MemPercent float64 `json:"mem_percent"`
+	Uptime     int64   `json:"uptime_seconds"`
 }
 
 // Stats returns live CPU/memory usage for all domains.
@@ -401,11 +401,11 @@ func (s *Service) Delete(ctx context.Context, uuid string) error {
 
 // SnapshotInfo describes a VM snapshot.
 type SnapshotInfo struct {
-	Name      string `json:"name"`
-	Created   string `json:"created,omitempty"`
-	State     string `json:"state,omitempty"`
-	Current   bool   `json:"current"`
-	HasMeta   bool   `json:"has_metadata"`
+	Name    string `json:"name"`
+	Created string `json:"created,omitempty"`
+	State   string `json:"state,omitempty"`
+	Current bool   `json:"current"`
+	HasMeta bool   `json:"has_metadata"`
 }
 
 // Snapshots lists all snapshots of a VM.
@@ -851,8 +851,8 @@ func (s *Service) AttachISO(ctx context.Context, uuid string, isoName string) er
 					File string `xml:"file,attr"`
 				} `xml:"source"`
 				Target struct {
-					Dev  string `xml:"dev,attr"`
-					Bus  string `xml:"bus,attr"`
+					Dev string `xml:"dev,attr"`
+					Bus string `xml:"bus,attr"`
 				} `xml:"target"`
 			} `xml:"disk"`
 		} `xml:"devices"`
@@ -869,8 +869,8 @@ func (s *Service) AttachISO(ctx context.Context, uuid string, isoName string) er
 			File string `xml:"file,attr"`
 		} `xml:"source"`
 		Target struct {
-			Dev  string `xml:"dev,attr"`
-			Bus  string `xml:"bus,attr"`
+			Dev string `xml:"dev,attr"`
+			Bus string `xml:"bus,attr"`
 		} `xml:"target"`
 	}, 0)
 	for _, dk := range domXML.Devices.Disks {
@@ -890,8 +890,8 @@ func (s *Service) AttachISO(ctx context.Context, uuid string, isoName string) er
 				File string `xml:"file,attr"`
 			} `xml:"source"`
 			Target struct {
-				Dev  string `xml:"dev,attr"`
-				Bus  string `xml:"bus,attr"`
+				Dev string `xml:"dev,attr"`
+				Bus string `xml:"bus,attr"`
 			} `xml:"target"`
 		}{
 			Type:   "file",

@@ -10,13 +10,13 @@ import (
 
 // Entry is a single activity log entry.
 type Entry struct {
-	ID        int64     `json:"id"`
-	Time      time.Time `json:"time"`
-	Category  string    `json:"category"` // docker | lxd | vm | proxmox | llm | system
-	Action    string    `json:"action"`   // e.g. "create", "start", "stop", "import"
-	Target    string    `json:"target"`   // e.g. container name, VM uuid
-	Message   string    `json:"message"`
-	Status    string    `json:"status"` // ok | error
+	ID       int64     `json:"id"`
+	Time     time.Time `json:"time"`
+	Category string    `json:"category"` // docker | lxd | vm | proxmox | llm | system
+	Action   string    `json:"action"`   // e.g. "create", "start", "stop", "import"
+	Target   string    `json:"target"`   // e.g. container name, VM uuid
+	Message  string    `json:"message"`
+	Status   string    `json:"status"` // ok | error
 }
 
 // Service keeps a ring buffer of recent activity, persisted to

@@ -9,8 +9,11 @@ import (
 type overview struct {
 	Host        any `json:"host"`
 	DockerCount int `json:"docker_count"`
+	DockerOK    bool `json:"docker_ok"` // service reachable, even with 0 containers
 	LXDCount    int `json:"lxd_count"`
+	LXDOK       bool `json:"lxd_ok"` // service reachable, even with 0 instances
 	VMCount     int `json:"vm_count"`
+	LibvirtOK   bool `json:"libvirt_ok"` // service reachable, even with 0 VMs
 }
 
 // OverviewData collects host stats and resource counts. Used by both the
@@ -25,16 +28,19 @@ func (h *Handlers) OverviewData(ctx context.Context) (*overview, error) {
 	if h.deps.Docker != nil {
 		if cs, err := h.deps.Docker.Containers(ctx, true); err == nil {
 			ov.DockerCount = len(cs)
+			ov.DockerOK = true
 		}
 	}
 	if h.deps.LXD != nil {
 		if insts, err := h.deps.LXD.Instances(ctx); err == nil {
 			ov.LXDCount = len(insts)
+			ov.LXDOK = true
 		}
 	}
 	if h.deps.Libvirt != nil {
 		if doms, err := h.deps.Libvirt.Domains(ctx); err == nil {
 			ov.VMCount = len(doms)
+			ov.LibvirtOK = true
 		}
 	}
 	return ov, nil
