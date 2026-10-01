@@ -308,10 +308,12 @@ EOF
   echo "==> Wrote $SUDOERS_FILE"
 fi
 
-# systemd unit
+# systemd unit — always restart so a newly installed binary actually takes
+# effect (enable --now is a no-op on an already-running service).
 install -m 0644 "$SCRIPT_DIR/lxddash.service" /etc/systemd/system/lxddash.service
 systemctl daemon-reload
-systemctl enable --now lxddash
+systemctl enable lxddash
+systemctl restart lxddash
 
 # ---------------------------------------------------------------------------
 # 4. Done
