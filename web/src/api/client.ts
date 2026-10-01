@@ -153,6 +153,7 @@ export const api = {
     images: () => request<any[]>('/docker/images'),
     pullImage: (ref: string) =>
       request<any>('/docker/images/pull', { method: 'POST', body: JSON.stringify({ ref }) }),
+    pullStatus: (id: string) => request<any>(`/docker/images/pull/${encodeURIComponent(id)}`),
     removeImage: (id: string) => request<any>(`/docker/images/${id}`, { method: 'DELETE' }),
     pruneImages: () => request<any>('/docker/images/prune', { method: 'POST' }),
     networks: () => request<any[]>('/docker/networks'),
@@ -218,6 +219,7 @@ export const api = {
     images: () => request<any[]>('/lxd/images'),
     pullImage: (remote: string) =>
       request<any>('/lxd/images/pull', { method: 'POST', body: JSON.stringify({ remote }) }),
+    pullStatus: (id: string) => request<any>(`/lxd/images/pull/${encodeURIComponent(id)}`),
     deleteImage: (fingerprint: string) =>
       request<any>(`/lxd/images/${encodeURIComponent(fingerprint)}`, { method: 'DELETE' }),
     profiles: () => request<any[]>('/lxd/profiles'),

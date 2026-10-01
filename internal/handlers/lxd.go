@@ -325,12 +325,27 @@ func (h *Handlers) LXDPullImage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := h.deps.LXD.PullImage(r.Context(), req.Remote, req.Alias); err != nil {
+	task, err := h.deps.LXD.StartPull(req.Remote, req.Alias)
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.logActivity("lxd", "image-pull", req.Remote, "image pulled", nil)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "pulled"})
+	h.logActivity("lxd", "image-pull", req.Remote, "image pull started", nil)
+	writeJSON(w, http.StatusAccepted, task)
+}
+
+// LXDPullImageStatus returns progress for an in-flight image pull.
+func (h *Handlers) LXDPullImageStatus(w http.ResponseWriter, r *http.Request) {
+	if h.deps.LXD == nil {
+		writeErr(w, http.StatusServiceUnavailable, "lxd service unavailable")
+		return
+	}
+	task, err := h.deps.LXD.GetPullTask(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
 }
 
 // LXDDeleteImage removes an image from the local store.

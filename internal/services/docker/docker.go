@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -20,6 +21,9 @@ import (
 // Service wraps the official Docker Engine API client.
 type Service struct {
 	cli *client.Client
+
+	pullMu    sync.Mutex
+	pullTasks map[string]*PullTask
 }
 
 func New() (*Service, error) {
@@ -260,6 +264,128 @@ func (s *Service) PullImage(ctx context.Context, ref string) error {
 			return err
 		}
 	}
+}
+
+// PullTask tracks an in-flight Docker image pull for progress reporting.
+type PullTask struct {
+	ID       string                  `json:"id"`
+	Ref      string                  `json:"ref"`
+	Status   string                  `json:"status"`   // running | done | failed
+	Progress float64                 `json:"progress"` // 0-100
+	Message  string                  `json:"message"`
+	Error    string                  `json:"error,omitempty"`
+	Layers   map[string]*layerStatus `json:"layers,omitempty"`
+}
+
+type layerStatus struct {
+	Status  string `json:"status"`
+	Current int64  `json:"current"`
+	Total   int64  `json:"total"`
+}
+
+// StartPull begins an image pull in the background and returns a task
+// handle; poll GetPullTask for progress.
+func (s *Service) StartPull(ref string) (*PullTask, error) {
+	task := &PullTask{
+		ID:      fmt.Sprintf("pull-%d", time.Now().UnixNano()),
+		Ref:     ref,
+		Status:  "running",
+		Message: "starting pull",
+		Layers:  map[string]*layerStatus{},
+	}
+	s.pullMu.Lock()
+	if s.pullTasks == nil {
+		s.pullTasks = map[string]*PullTask{}
+	}
+	s.pullTasks[task.ID] = task
+	s.pullMu.Unlock()
+
+	go func() {
+		// Background context: the HTTP request that created this task has
+		// already returned by the time this runs.
+		rc, err := s.cli.ImagePull(context.Background(), ref, client.ImagePullOptions{})
+		if err != nil {
+			s.updatePull(task.ID, func(t *PullTask) { t.Status, t.Error, t.Message = "failed", err.Error(), "pull failed" })
+			return
+		}
+		defer rc.Close()
+		dec := json.NewDecoder(rc)
+		for {
+			var msg struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+				Error  string `json:"error"`
+				ProgressDetail struct {
+					Current int64 `json:"current"`
+					Total   int64 `json:"total"`
+				} `json:"progressDetail"`
+			}
+			if err := dec.Decode(&msg); err != nil {
+				if err == io.EOF {
+					s.updatePull(task.ID, func(t *PullTask) { t.Status, t.Progress, t.Message = "done", 100, "pull complete" })
+					return
+				}
+				s.updatePull(task.ID, func(t *PullTask) { t.Status, t.Error, t.Message = "failed", err.Error(), "pull failed" })
+				return
+			}
+			if msg.Error != "" {
+				errMsg := msg.Error
+				s.updatePull(task.ID, func(t *PullTask) { t.Status, t.Error, t.Message = "failed", errMsg, "pull failed" })
+				return
+			}
+			s.updatePull(task.ID, func(t *PullTask) {
+				if msg.ID != "" {
+					ls, ok := t.Layers[msg.ID]
+					if !ok {
+						ls = &layerStatus{}
+						t.Layers[msg.ID] = ls
+					}
+					if msg.Status != "" {
+						ls.Status = msg.Status
+					}
+					if msg.ProgressDetail.Total > 0 {
+						ls.Current = msg.ProgressDetail.Current
+						ls.Total = msg.ProgressDetail.Total
+					}
+					var cur, tot int64
+					for _, l := range t.Layers {
+						if l.Total > 0 {
+							cur += l.Current
+							tot += l.Total
+						}
+					}
+					if tot > 0 {
+						t.Progress = float64(cur) / float64(tot) * 100
+					}
+					t.Message = fmt.Sprintf("%d layers", len(t.Layers))
+				} else if msg.Status != "" {
+					t.Message = msg.Status
+				}
+			})
+		}
+	}()
+	cp := *task
+	return &cp, nil
+}
+
+func (s *Service) updatePull(id string, mutate func(*PullTask)) {
+	s.pullMu.Lock()
+	defer s.pullMu.Unlock()
+	if t, ok := s.pullTasks[id]; ok {
+		mutate(t)
+	}
+}
+
+// GetPullTask returns a snapshot of an in-flight pull task.
+func (s *Service) GetPullTask(id string) (*PullTask, error) {
+	s.pullMu.Lock()
+	defer s.pullMu.Unlock()
+	t, ok := s.pullTasks[id]
+	if !ok {
+		return nil, fmt.Errorf("pull task not found")
+	}
+	cp := *t
+	return &cp, nil
 }
 
 func (s *Service) RemoveImage(ctx context.Context, id string) error {

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { confirm } from '../components/ConfirmDialog'
 import { api } from '../api/client'
+import Modal from '../components/Modal'
+import ProgressBar from '../components/ProgressBar'
 import Spinner from '../components/Spinner'
 import Wizard from '../components/Wizard'
-import { btnAction, btnPrimary, inputCls } from '../components/ui'
+import { btnAction, btnGhost, btnPrimary, inputCls } from '../components/ui'
 
 interface Image {
   fingerprint: string
@@ -249,18 +251,73 @@ function PullModal({ onClose, onPulled }: { onClose: () => void; onPulled: () =>
   const [remote, setRemote] = useState('ubuntu:24.04')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [taskId, setTaskId] = useState('')
+  const [task, setTask] = useState<any>(null)
 
   async function submit() {
     setBusy(true)
     setError('')
     try {
-      await api.lxd.pullImage(remote)
-      onPulled()
+      const t = await api.lxd.pullImage(remote)
+      setTaskId(t.id)
+      setTask(t)
     } catch (e: any) {
       setError(e.message)
     } finally {
       setBusy(false)
     }
+  }
+
+  // Poll pull progress once started; close + refresh when done.
+  useEffect(() => {
+    if (!taskId) return
+    const iv = setInterval(async () => {
+      try {
+        const t = await api.lxd.pullStatus(taskId)
+        setTask(t)
+        if (t.status === 'done') {
+          clearInterval(iv)
+          onPulled()
+        } else if (t.status === 'failed') {
+          clearInterval(iv)
+          setError(t.error || t.message || 'pull failed')
+        }
+      } catch { /* keep polling */ }
+    }, 1000)
+    return () => clearInterval(iv)
+  }, [taskId, onPulled])
+
+  if (taskId) {
+    return (
+      <Modal title={`Pulling ${remote}`} onClose={onClose}>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-600">{error ? 'Failed' : task?.message || 'starting…'}</span>
+            <span className="font-medium text-gray-900">{(task?.progress || 0).toFixed(0)}%</span>
+          </div>
+          <ProgressBar percent={task?.progress || 0} color={error ? 'bg-red-400' : 'bg-blue-500'} />
+          {task?.downloaded_bytes > 0 && (
+            <div className="text-xs text-gray-500">
+              {fmtBytes(task.downloaded_bytes)} downloaded
+              {task?.speed_bytes > 0 && ` · ${(task.speed_bytes / 1048576).toFixed(1)} MB/s`}
+            </div>
+          )}
+          {error && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>
+          )}
+          <div className="flex justify-end gap-2">
+            {error && (
+              <button onClick={() => { setTaskId(''); setTask(null); setError('') }} className={btnGhost}>
+                Back
+              </button>
+            )}
+            <button onClick={onClose} className={btnGhost}>
+              {error ? 'Close' : 'Run in background'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )
   }
 
   return (

@@ -206,11 +206,26 @@ func (h *Handlers) DockerPullImage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := h.deps.Docker.PullImage(r.Context(), req.Ref); err != nil {
+	task, err := h.deps.Docker.StartPull(req.Ref)
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "pulled"})
+	writeJSON(w, http.StatusAccepted, task)
+}
+
+// DockerPullImageStatus returns progress for an in-flight image pull.
+func (h *Handlers) DockerPullImageStatus(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Docker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "docker service unavailable")
+		return
+	}
+	task, err := h.deps.Docker.GetPullTask(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
 }
 
 func (h *Handlers) DockerRemoveImage(w http.ResponseWriter, r *http.Request) {

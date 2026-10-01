@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +22,9 @@ import (
 // Service wraps the official LXD client (unix socket).
 type Service struct {
 	server incus.InstanceServer
+
+	pullMu    sync.Mutex
+	pullTasks map[string]*PullTask
 }
 
 // New connects to the LXD unix socket. The HTTP client carries a timeout so
@@ -401,9 +406,11 @@ func (s *Service) Images(ctx context.Context) ([]api.Image, error) {
 // simple-streams URL) into the local image store. The alias is passed
 // to the server which resolves it with its own client (this avoids
 // fingerprint mismatches between client and server versions).
-func (s *Service) PullImage(ctx context.Context, remote, alias string) error {
+// buildImagePost resolves "ubuntu:24.04"-style remotes into an incus
+// image-create request (shared by the sync and tracked pull paths).
+func buildImagePost(remote, alias string) (*api.ImagesPost, error) {
 	if remote == "" {
-		return fmt.Errorf("remote is required (e.g. ubuntu:24.04)")
+		return nil, fmt.Errorf("remote is required (e.g. ubuntu:24.04)")
 	}
 	// Split "ubuntu:24.04" into server + alias.
 	serverURL := remote
@@ -413,7 +420,7 @@ func (s *Service) PullImage(ctx context.Context, remote, alias string) error {
 		imageAlias = remote[i+1:]
 	}
 	if imageAlias == "" {
-		return fmt.Errorf("image alias is required (e.g. ubuntu:24.04)")
+		return nil, fmt.Errorf("image alias is required (e.g. ubuntu:24.04)")
 	}
 
 	protocol := "simplestreams"
@@ -436,7 +443,7 @@ func (s *Service) PullImage(ctx context.Context, remote, alias string) error {
 		imageAlias = strings.SplitN(remote, ":", 2)[0] + "/" + imageAlias
 	default:
 		if !strings.HasPrefix(serverURL, "https://") {
-			return fmt.Errorf("unknown remote %q (use a well-known name or https:// URL)", serverURL)
+			return nil, fmt.Errorf("unknown remote %q (use a well-known name or https:// URL)", serverURL)
 		}
 		protocol = "incus"
 	}
@@ -453,11 +460,130 @@ func (s *Service) PullImage(ctx context.Context, remote, alias string) error {
 			Type: "image",
 		},
 	}
-	op, err := s.server.CreateImage(post, nil)
+	return &post, nil
+}
+
+func (s *Service) PullImage(ctx context.Context, remote, alias string) error {
+	post, err := buildImagePost(remote, alias)
+	if err != nil {
+		return err
+	}
+	op, err := s.server.CreateImage(*post, nil)
 	if err != nil {
 		return err
 	}
 	return op.Wait()
+}
+
+// PullTask tracks an in-flight LXD image pull for progress reporting.
+type PullTask struct {
+	ID              string  `json:"id"`
+	Remote          string  `json:"remote"`
+	Status          string  `json:"status"`   // running | done | failed
+	Progress        float64 `json:"progress"` // 0-100
+	Message         string  `json:"message"`
+	Error           string  `json:"error,omitempty"`
+	DownloadedBytes int64   `json:"downloaded_bytes,omitempty"`
+	SpeedBytes      int64   `json:"speed_bytes,omitempty"`
+}
+
+// StartPull begins an image pull in the background and returns a task
+// handle; poll GetPullTask for progress.
+func (s *Service) StartPull(remote, alias string) (*PullTask, error) {
+	post, err := buildImagePost(remote, alias)
+	if err != nil {
+		return nil, err
+	}
+	op, err := s.server.CreateImage(*post, nil)
+	if err != nil {
+		return nil, err
+	}
+	task := &PullTask{
+		ID:      fmt.Sprintf("pull-%d", time.Now().UnixNano()),
+		Remote:  remote,
+		Status:  "running",
+		Message: "starting download",
+	}
+	s.pullMu.Lock()
+	if s.pullTasks == nil {
+		s.pullTasks = map[string]*PullTask{}
+	}
+	s.pullTasks[task.ID] = task
+	s.pullMu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			// This client version's Get() returns the operation snapshot
+			// directly; compare the string status for version portability.
+			o := op.Get()
+			prog, down, speed := pullProgressFromOp(&o)
+			switch o.Status {
+			case "Success":
+				s.updatePull(task.ID, "done", 100, "complete", 0, 0)
+				return
+			case "Failure", "Cancelled", "Canceling":
+				msg := "pull failed"
+				if v, ok := o.Metadata["err"]; ok && v != nil {
+					msg = fmt.Sprint(v)
+				}
+				s.updatePull(task.ID, "failed", prog, msg, down, speed)
+				return
+			default:
+				s.updatePull(task.ID, "running", prog, "downloading", down, speed)
+			}
+		}
+	}()
+	return task, nil
+}
+
+// pullProgressFromOp extracts download percentage/bytes/speed from LXD
+// operation metadata (best-effort — keys vary between LXD versions).
+func pullProgressFromOp(o *api.Operation) (prog float64, down, speed int64) {
+	if o == nil || o.Metadata == nil {
+		return 0, 0, 0
+	}
+	if v, ok := o.Metadata["download_progress"]; ok {
+		if f, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+			prog = f
+		}
+	}
+	if v, ok := o.Metadata["download_bytes"]; ok {
+		if f, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+			down = int64(f)
+		}
+	}
+	if v, ok := o.Metadata["download_speed"]; ok {
+		if f, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+			speed = int64(f)
+		}
+	}
+	return
+}
+
+func (s *Service) updatePull(id, status string, prog float64, msg string, down, speed int64) {
+	s.pullMu.Lock()
+	defer s.pullMu.Unlock()
+	if t, ok := s.pullTasks[id]; ok {
+		t.Status, t.Progress, t.Message = status, prog, msg
+		t.DownloadedBytes, t.SpeedBytes = down, speed
+		if status == "failed" {
+			t.Error = msg
+		}
+	}
+}
+
+// GetPullTask returns a snapshot of an in-flight pull task.
+func (s *Service) GetPullTask(id string) (*PullTask, error) {
+	s.pullMu.Lock()
+	defer s.pullMu.Unlock()
+	t, ok := s.pullTasks[id]
+	if !ok {
+		return nil, fmt.Errorf("pull task not found")
+	}
+	cp := *t
+	return &cp, nil
 }
 
 // DeleteImage removes an image from the local store by fingerprint.

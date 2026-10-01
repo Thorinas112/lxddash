@@ -5,6 +5,7 @@ import AssistModal from '../components/AssistModal'
 import Badge from '../components/Badge'
 import LiveGraphsModal from '../components/LiveGraphsModal'
 import Modal from '../components/Modal'
+import ProgressBar from '../components/ProgressBar'
 import { confirm, promptInline } from '../components/ConfirmDialog'
 import Spinner from '../components/Spinner'
 import Wizard from '../components/Wizard'
@@ -850,19 +851,68 @@ function PullImageModal({ onClose, onPulled }: { onClose: () => void; onPulled: 
   const [ref, setRef] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [taskId, setTaskId] = useState('')
+  const [task, setTask] = useState<any>(null)
 
   async function submit() {
     if (!ref) return
     setBusy(true)
     setError('')
     try {
-      await api.docker.pullImage(ref)
-      onPulled()
+      const t = await api.docker.pullImage(ref)
+      setTaskId(t.id)
+      setTask(t)
     } catch (e: any) {
       setError(e.message)
     } finally {
       setBusy(false)
     }
+  }
+
+  // Poll pull progress once started; close + refresh when done.
+  useEffect(() => {
+    if (!taskId) return
+    const iv = setInterval(async () => {
+      try {
+        const t = await api.docker.pullStatus(taskId)
+        setTask(t)
+        if (t.status === 'done') {
+          clearInterval(iv)
+          onPulled()
+        } else if (t.status === 'failed') {
+          clearInterval(iv)
+          setError(t.error || t.message || 'pull failed')
+        }
+      } catch { /* keep polling */ }
+    }, 1000)
+    return () => clearInterval(iv)
+  }, [taskId, onPulled])
+
+  if (taskId) {
+    return (
+      <Modal title={`Pulling ${ref}`} onClose={onClose}>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-600">{error ? 'Failed' : task?.message || 'starting…'}</span>
+            <span className="font-medium text-gray-900">{(task?.progress || 0).toFixed(0)}%</span>
+          </div>
+          <ProgressBar percent={task?.progress || 0} color={error ? 'bg-red-400' : 'bg-blue-500'} />
+          {error && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>
+          )}
+          <div className="flex justify-end gap-2">
+            {error && (
+              <button onClick={() => { setTaskId(''); setTask(null); setError('') }} className={btnGhost}>
+                Back
+              </button>
+            )}
+            <button onClick={onClose} className={btnGhost}>
+              {error ? 'Close' : 'Run in background'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )
   }
 
   return (
