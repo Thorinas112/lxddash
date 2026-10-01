@@ -71,10 +71,10 @@ if ! command -v lxc >/dev/null 2>&1; then
 fi
 lxd init --auto 2>/dev/null || true
 
-# libvirt + KVM
+# libvirt + KVM (qemu-kvm is a virtual package on newer Ubuntu — use qemu-system-x86)
 if ! systemctl is-active --quiet libvirtd 2>/dev/null; then
   log "Installing libvirt + KVM..."
-  apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients || true
+  apt-get install -y qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients || true
 fi
 systemctl enable --now libvirtd 2>/dev/null || true
 

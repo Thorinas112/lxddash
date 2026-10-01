@@ -41,7 +41,7 @@ curl -fsSL https://get.docker.com | sh
 snap install lxd && lxd init
 
 # KVM/QEMU + libvirt (for VM management)
-apt install -y qemu-kvm libvirt-daemon-system
+apt install -y qemu-system-x86 qemu-utils libvirt-daemon-system
 
 # Proxmox imports only
 apt install -y qemu-utils lxd-client zstd xz-utils lzop  # qemu-img, lxc CLI, decompressors

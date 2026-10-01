@@ -87,7 +87,8 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
   echo "==> Installing system dependencies..."
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y curl ca-certificates git qemu-kvm libvirt-daemon-system
+  # qemu-kvm is a virtual package on newer Ubuntu — request qemu-system-x86 explicitly
+  apt-get install -y curl ca-certificates git qemu-system-x86 qemu-utils libvirt-daemon-system
 
   if [[ $WITH_PROXMOX -eq 1 ]]; then
     # qemu-img (disk conversion) + lxc CLI (rootfs import into LXD)
