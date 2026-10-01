@@ -143,6 +143,15 @@ for candidate in "$REPO_DIR/bin/lxddash-linux" "$REPO_DIR/bin/lxddash"; do
   fi
 done
 
+# Rebuild when the source tree is newer than a prebuilt binary (e.g. after
+# `git pull`) — otherwise a stale binary gets reinstalled forever.
+if [[ -n "$BINARY" && -d "$REPO_DIR/internal" ]]; then
+  if [[ -n "$(find "$REPO_DIR/internal" "$REPO_DIR/cmd" "$REPO_DIR/go.mod" -type f -newer "$BINARY" 2>/dev/null | head -1)" ]]; then
+    echo "==> Source is newer than $BINARY — rebuilding..."
+    BINARY=""
+  fi
+fi
+
 if [[ -z "$BINARY" ]]; then
   # Building from source needs Go >= 1.26 (Incus client requirement);
   # bootstrap the official toolchain if missing or too old.
@@ -175,9 +184,18 @@ install -d /usr/local/bin /etc/lxddash /var/lib/lxddash \
   /usr/share/lxddash/web /var/lib/vz/dump /var/lib/libvirt/images
 install -m 0755 "$BINARY" /usr/local/bin/lxddash
 
-# Frontend — build from source when dist is missing (needs Node.js 18+)
-if [[ ! -d "$REPO_DIR/web/dist" && -f "$REPO_DIR/web/package.json" ]]; then
-  echo "==> web/dist missing — building frontend..."
+# Frontend — build from source when dist is missing OR older than web/src
+# (needs Node.js 18+); otherwise stale UI assets get reinstalled forever.
+NEED_WEB_BUILD=0
+if [[ -f "$REPO_DIR/web/package.json" ]]; then
+  if [[ ! -f "$REPO_DIR/web/dist/index.html" ]]; then
+    NEED_WEB_BUILD=1
+  elif [[ -n "$(find "$REPO_DIR/web/src" -type f -newer "$REPO_DIR/web/dist/index.html" 2>/dev/null | head -1)" ]]; then
+    NEED_WEB_BUILD=1
+  fi
+fi
+if [[ $NEED_WEB_BUILD -eq 1 ]]; then
+  echo "==> Building frontend (missing or older than web/src)..."
   if ! command -v npm >/dev/null 2>&1; then
     apt-get install -y nodejs npm >/dev/null
   fi
