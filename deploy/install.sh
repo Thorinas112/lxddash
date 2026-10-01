@@ -156,13 +156,19 @@ if [[ -z "$BINARY" ]]; then
   # Building from source needs Go >= 1.26 (Incus client requirement);
   # bootstrap the official toolchain if missing or too old.
   if ! command -v go >/dev/null 2>&1 || ! dpkg --compare-versions "$(go env GOVERSION 2>/dev/null | sed 's/^go//')" ge "1.26"; then
-    echo "==> Installing Go toolchain (>= 1.26)..."
-    GOVER="1.26.1"
-    GOARCH_T="$(uname -m)"; case "$GOARCH_T" in aarch64|arm64) GOARCH_T=arm64 ;; *) GOARCH_T=amd64 ;; esac
-    curl -fsSL "https://go.dev/dl/go${GOVER}.linux-${GOARCH_T}.tar.gz" -o /tmp/go.tgz
-    rm -rf /usr/local/go
-    tar -C /usr/local -xzf /tmp/go.tgz
-    rm -f /tmp/go.tgz
+    # Reuse a previously bootstrapped toolchain (sudo's secure_path does not
+    # include /usr/local/go/bin, so `go` looks missing on every run).
+    if [[ -x /usr/local/go/bin/go ]] && dpkg --compare-versions "$(/usr/local/go/bin/go env GOVERSION 2>/dev/null | sed 's/^go//')" ge "1.26"; then
+      echo "==> Using existing Go toolchain at /usr/local/go"
+    else
+      echo "==> Installing Go toolchain (>= 1.26)..."
+      GOVER="1.26.1"
+      GOARCH_T="$(uname -m)"; case "$GOARCH_T" in aarch64|arm64) GOARCH_T=arm64 ;; *) GOARCH_T=amd64 ;; esac
+      curl -fsSL "https://go.dev/dl/go${GOVER}.linux-${GOARCH_T}.tar.gz" -o /tmp/go.tgz
+      rm -rf /usr/local/go
+      tar -C /usr/local -xzf /tmp/go.tgz
+      rm -f /tmp/go.tgz
+    fi
   fi
   export PATH="$PATH:/usr/local/go/bin"
   if command -v go >/dev/null 2>&1; then
