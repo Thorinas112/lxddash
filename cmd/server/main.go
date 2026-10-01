@@ -4,6 +4,10 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"lxddash/internal/api"
@@ -57,6 +61,38 @@ func main() {
 	libvirtSvc, err := libvirt.New(cfg.LibvirtURI, cfg.VMImageDir, cfg.ISODir)
 	if err != nil {
 		log.Printf("warning: libvirt service unavailable: %v", err)
+	}
+
+	// LXD and libvirt connect eagerly at startup; if their sockets are not
+	// ready yet (fresh installs), those services would stay "Unavailable"
+	// forever. Exit so systemd restarts the process with fresh connections,
+	// retrying every 30s up to 20 times (count persisted in the data dir).
+	retryPath := filepath.Join(cfg.DataDir, "service-retries")
+	if lxdSvc != nil && libvirtSvc != nil {
+		_ = os.Remove(retryPath)
+	} else {
+		missing := make([]string, 0, 2)
+		if lxdSvc == nil {
+			missing = append(missing, "LXD")
+		}
+		if libvirtSvc == nil {
+			missing = append(missing, "libvirt")
+		}
+		log.Printf("warning: %s not ready at startup — will retry via restart every 30s (max 20)", strings.Join(missing, "+"))
+		go func() {
+			n := 0
+			if b, err := os.ReadFile(retryPath); err == nil {
+				n, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+			}
+			for n < 20 {
+				time.Sleep(30 * time.Second)
+				n++
+				_ = os.WriteFile(retryPath, []byte(strconv.Itoa(n)), 0o600)
+				log.Printf("services still not ready — restarting to retry (%d/20)", n)
+				os.Exit(1)
+			}
+			log.Printf("giving up after 20 retries — start the missing services, then: sudo systemctl restart lxddash")
+		}()
 	}
 
 	proxmoxSvc := proxmox.New(cfg.ProxmoxDumpDir, cfg.ProxmoxStaging, cfg.VMImageDir, lxdSvc, libvirtSvc)

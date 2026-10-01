@@ -114,6 +114,11 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
     snap install lxd
   fi
 
+  # Initialise LXD (default storage pool + network) on first install
+  if command -v lxd >/dev/null 2>&1; then
+    lxd init --auto 2>/dev/null || true
+  fi
+
   # vma (Proxmox VMA extractor) — only available from Proxmox repos
   if [[ $WITH_PROXMOX -eq 1 ]] && ! command -v vma >/dev/null 2>&1; then
     echo "==> NOTE: the 'vma' tool was not found."
@@ -186,6 +191,22 @@ else
   echo "warning: web/dist not found — the web UI will not be served." >&2
   echo "  Build it with: cd web && npm install && npm run build" >&2
 fi
+
+# Wait for runtime sockets so the app doesn't start against services that
+# are still initialising (snap LXD in particular takes a few seconds) —
+# detection below and the app's eager connections both depend on this.
+echo "==> Waiting for service sockets..."
+for i in $(seq 1 30); do
+  missing=0
+  [[ -S /var/run/docker.sock ]] || missing=1
+  [[ -S /var/snap/lxd/common/lxd/unix.socket || -S /var/lib/lxd/unix.socket ]] || missing=1
+  [[ -S /run/libvirt/libvirt-sock ]] || missing=1
+  if [[ $missing -eq 0 ]]; then
+    echo "    all sockets ready (${i}s)"
+    break
+  fi
+  sleep 1
+done
 
 # Detect LXD socket (snap vs apt)
 LXD_SOCKET="/var/lib/lxd/unix.socket"
