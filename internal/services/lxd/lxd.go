@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	incus "github.com/lxc/incus/client"
@@ -20,8 +22,13 @@ type Service struct {
 	server incus.InstanceServer
 }
 
+// New connects to the LXD unix socket. The HTTP client carries a timeout so
+// a half-initialised daemon (e.g. snap LXD still starting or wedged) fails
+// fast instead of blocking dashboard startup forever.
 func New(socketPath string) (*Service, error) {
-	server, err := incus.ConnectIncusUnix(socketPath, nil)
+	server, err := incus.ConnectIncusUnix(socketPath, &incus.ConnectionArgs{
+		HTTPClient: &http.Client{Timeout: 10 * time.Second},
+	})
 	if err != nil {
 		return nil, err
 	}

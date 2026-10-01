@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"lxddash/internal/api"
@@ -40,6 +41,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+
+	// Startup watchdog: service constructors dial their backends eagerly;
+	// if one hangs (e.g. a half-initialised daemon accepting connections
+	// but never answering), exit so systemd restarts instead of leaving
+	// the dashboard unreachable on port 8080.
+	var started atomic.Bool
+	go func() {
+		time.Sleep(90 * time.Second)
+		if !started.Load() {
+			log.Printf("startup watchdog: server not listening after 90s — exiting for systemd restart")
+			os.Exit(1)
+		}
+	}()
 
 	authSvc, err := auth.New(cfg)
 	if err != nil {
@@ -160,6 +174,7 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	started.Store(true)
 	log.Printf("LXD Dash listening on %s", cfg.ListenAddr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
