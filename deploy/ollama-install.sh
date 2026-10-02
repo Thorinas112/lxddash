@@ -22,7 +22,10 @@ TGZ=/tmp/ollama-linux-amd64.tar.zst
 
 echo "==> Downloading Ollama (HTTP/1.1, resumable)..."
 for attempt in $(seq 1 30); do
-  if curl -fL --http1.1 --retry 3 -C - -o "$TGZ" "$URL"; then
+  # --speed-limit/--speed-time: abandon stalled streams after 15s below
+  # 20KB/s so the resume loop restarts them instead of hanging for minutes
+  # on a dead connection. -m caps any single attempt at 30 minutes.
+  if curl -fL --http1.1 --retry 3 -C - --speed-limit 20000 --speed-time 15 -m 1800 -o "$TGZ" "$URL"; then
     break
   fi
   SIZE=$(stat -c%s "$TGZ" 2>/dev/null || echo 0)
