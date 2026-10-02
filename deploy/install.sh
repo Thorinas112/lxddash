@@ -173,10 +173,16 @@ fi
 # Models are pulled from the UI so the installer stays fast and light.
 if [[ $WITH_LLM -eq 0 ]]; then
   step "LLM runtime (Ollama) — skipped (--no-llm)"
-elif command -v ollama >/dev/null 2>&1 && ollama --version >/dev/null 2>&1; then
+elif command -v ollama >/dev/null 2>&1 && ollama --version >/dev/null 2>&1 \
+  && systemctl list-unit-files ollama.service 2>/dev/null | grep -q ollama; then
   step "LLM runtime (Ollama) — already installed"
   systemctl enable --now ollama 2>/dev/null || true
+  if ! systemctl is-active --quiet ollama; then
+    echo "    warning: ollama service not running — start it with: sudo systemctl restart ollama" >&2
+  fi
 else
+  # Also reached when a previous run left a binary without the systemd
+  # unit (failed mid-download) — the official installer repairs that.
   step "LLM runtime (Ollama)..."
   echo "    installing via the official installer (retries flaky downloads)..."
   INSTALLED=0
