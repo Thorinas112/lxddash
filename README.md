@@ -81,15 +81,18 @@ folder + a built binary):
 sudo bash deploy/install.sh
 ```
 
-The script installs Docker, LXD, KVM/libvirt and the app itself, writes
-`/etc/lxddash/config.json`, and starts the `lxddash` systemd service.
+The script installs Docker, LXD, KVM/libvirt, Ollama (for the LLM page)
+and the app itself, writes `/etc/lxddash/config.json`, and starts the
+`lxddash` systemd service.
 
 Useful flags:
 
 ```bash
+sudo bash deploy/install.sh --update      # git pull latest source, then install
 sudo bash deploy/install.sh --skip-deps   # deps already installed
 sudo bash deploy/install.sh --port 9000   # custom port
 sudo bash deploy/install.sh --no-proxmox  # skip Proxmox import tooling
+sudo bash deploy/install.sh --no-llm      # skip the Ollama (LLM) install
 ```
 
 If you built on another machine, copy the binary + frontend first:

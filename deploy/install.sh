@@ -10,25 +10,31 @@
 #   sudo bash install.sh --skip-deps   # only install the app (deps already present)
 #   sudo bash install.sh --port 9000   # listen on a custom port
 #   sudo bash install.sh --no-proxmox  # skip Proxmox import tooling (qemu-utils, lxd-client)
+#   sudo bash install.sh --no-llm      # skip the Ollama (LLM) runtime install
+#   sudo bash install.sh --update      # git pull the latest source, then install
 #   sudo bash install.sh --uninstall   # remove LXD Dash completely
 #
 # The script looks for a prebuilt binary in this order:
 #   1. bin/lxddash-linux   (cross-compiled on Windows: make cross)
 #   2. bin/lxddash         (built on the server: make backend)
 #   3. Downloads from GitHub releases (if REPO is not a local checkout)
-#   4. Builds from source  (requires Go 1.22+)
+#   4. Builds from source  (requires Go 1.26+; auto-installed when missing)
 #
 set -euo pipefail
 
 PORT="8080"
 SKIP_DEPS=0
 WITH_PROXMOX=1
+WITH_LLM=1
+UPDATE=0
 UNINSTALL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-deps) SKIP_DEPS=1 ;;
     --no-proxmox) WITH_PROXMOX=0 ;;
+    --no-llm) WITH_LLM=0 ;;
+    --update) UPDATE=1 ;;
     --uninstall) UNINSTALL=1 ;;
     --port=*) PORT="${1#*=}" ;;
     --port) PORT="$2"; shift ;;
@@ -62,6 +68,12 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Optional self-update: pull the latest source before installing.
+if [[ $UPDATE -eq 1 && -d "$REPO_DIR/.git" ]]; then
+  echo "==> --update: pulling latest source..."
+  (cd "$REPO_DIR" && git pull --ff-only) || echo "warning: git pull failed — continuing with local source" >&2
+fi
+
 # Progress helpers: numbered phase banners with per-step + total timing.
 STEP=0
 LAST_T=0
@@ -69,9 +81,9 @@ step() {
   STEP=$((STEP + 1))
   echo ""
   if [[ $STEP -eq 1 ]]; then
-    echo "==> [1/6] $*"
+    echo "==> [1/7] $*"
   else
-    echo "==> [$STEP/6] $*  (previous step: $((SECONDS - LAST_T))s)"
+    echo "==> [$STEP/7] $*  (previous step: $((SECONDS - LAST_T))s)"
   fi
   LAST_T=$SECONDS
 }
@@ -145,9 +157,35 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
   step "Starting runtime services (libvirtd, docker, snap lxd)..."
   systemctl enable --now libvirtd 2>/dev/null || true
   systemctl enable --now docker 2>/dev/null || true
+
+  # Convenience: give the invoking user CLI access to the runtimes
+  if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+    if usermod -aG docker,lxd,libvirt "$SUDO_USER" 2>/dev/null; then
+      echo "    added $SUDO_USER to docker/lxd/libvirt groups (re-login for CLI access)"
+    fi
+  fi
 else
   step "System dependencies — skipped (--skip-deps)"
   step "Runtime services — skipped (--skip-deps)"
+fi
+
+# LLM runtime (Ollama) — installed by default; the LLM page needs it.
+# Models are pulled from the UI so the installer stays fast and light.
+if [[ $WITH_LLM -eq 0 ]]; then
+  step "LLM runtime (Ollama) — skipped (--no-llm)"
+elif command -v ollama >/dev/null 2>&1; then
+  step "LLM runtime (Ollama) — already installed"
+  systemctl enable --now ollama 2>/dev/null || true
+else
+  step "LLM runtime (Ollama)..."
+  echo "    installing via the official installer (includes systemd service)..."
+  if curl -fsSL https://ollama.com/install.sh | sh; then
+    systemctl enable --now ollama 2>/dev/null || true
+    echo "    Ollama installed — pull a model from the LLM page (e.g. llama3.2:1b)"
+  else
+    echo "    warning: Ollama install failed — LLM features will be unavailable." >&2
+    echo "    Retry later with: curl -fsSL https://ollama.com/install.sh | sh" >&2
+  fi
 fi
 
 # ---------------------------------------------------------------------------
