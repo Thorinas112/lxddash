@@ -162,6 +162,20 @@ func (h *Handlers) VM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// VMNetworks lists libvirt networks for the VM create wizard.
+func (h *Handlers) VMNetworks(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Libvirt == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	nets, err := h.deps.Libvirt.Networks(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, nets)
+}
+
 func (h *Handlers) VMStart(w http.ResponseWriter, r *http.Request)    { h.vmAction(w, r, "start") }
 func (h *Handlers) VMShutdown(w http.ResponseWriter, r *http.Request) { h.vmAction(w, r, "shutdown") }
 func (h *Handlers) VMReboot(w http.ResponseWriter, r *http.Request)   { h.vmAction(w, r, "reboot") }

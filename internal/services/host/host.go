@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,6 +61,79 @@ type Stats struct {
 type Service struct{}
 
 func New() *Service { return &Service{} }
+
+// LanInfo describes the LAN-facing network for macvlan setups: the
+// default-route interface, its CIDR/host address, and the gateway —
+// used so containers/VMs can take IPs from the router's DHCP.
+type LanInfo struct {
+	Parent  string   `json:"parent"`
+	CIDR    string   `json:"cidr"`
+	Addr    string   `json:"addr"`
+	Gateway string   `json:"gateway"`
+	Ifaces  []string `json:"ifaces"`
+}
+
+// LanInfo detects the LAN interface (default route) via ip(8).
+func (s *Service) LanInfo() (*LanInfo, error) {
+	out, err := exec.Command("ip", "-j", "route", "show", "default").Output()
+	if err != nil {
+		return nil, fmt.Errorf("detect default route: %w", err)
+	}
+	var routes []struct {
+		Gateway string `json:"gateway"`
+		Dev     string `json:"dev"`
+	}
+	if err := json.Unmarshal(out, &routes); err != nil || len(routes) == 0 {
+		return nil, fmt.Errorf("no default route found")
+	}
+	info := &LanInfo{Parent: routes[0].Dev, Gateway: routes[0].Gateway}
+
+	if adj, err := exec.Command("ip", "-j", "addr", "show").Output(); err == nil {
+		var ifaces []struct {
+			IfName   string `json:"ifname"`
+			AddrInfo []struct {
+				Family    string `json:"family"`
+				Local     string `json:"local"`
+				PrefixLen int    `json:"prefixlen"`
+			} `json:"addr_info"`
+		}
+		if json.Unmarshal(adj, &ifaces) == nil {
+			for _, iface := range ifaces {
+				if iface.IfName == "lo" || strings.HasPrefix(iface.IfName, "veth") ||
+					strings.HasPrefix(iface.IfName, "br-") || strings.HasPrefix(iface.IfName, "lxdbr") ||
+					strings.HasPrefix(iface.IfName, "virbr") || strings.HasPrefix(iface.IfName, "docker") {
+					continue
+				}
+				info.Ifaces = append(info.Ifaces, iface.IfName)
+				if iface.IfName == info.Parent {
+					for _, a := range iface.AddrInfo {
+						if a.Family == "inet" && a.Local != "" {
+							info.Addr = a.Local
+							info.CIDR = networkCIDR(a.Local, a.PrefixLen)
+						}
+					}
+				}
+			}
+		}
+	}
+	return info, nil
+}
+
+// networkCIDR computes the IPv4 network address for an address + prefix.
+func networkCIDR(addr string, prefix int) string {
+	parts := strings.Split(addr, ".")
+	if len(parts) != 4 || prefix < 0 || prefix > 32 {
+		return fmt.Sprintf("%s/%d", addr, prefix)
+	}
+	var ip uint32
+	for _, p := range parts {
+		v, _ := strconv.Atoi(p)
+		ip = ip<<8 | uint32(v&0xff)
+	}
+	mask := ^uint32(0) << (32 - uint(prefix))
+	net := ip & mask
+	return fmt.Sprintf("%d.%d.%d.%d/%d", byte(net>>24), byte(net>>16), byte(net>>8), byte(net), prefix)
+}
 
 // Stats gathers host metrics from /proc via gopsutil.
 func (s *Service) Stats(ctx context.Context) (*Stats, error) {

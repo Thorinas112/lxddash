@@ -660,6 +660,23 @@ func (s *Service) DeleteNetwork(ctx context.Context, name string) error {
 	return s.server.DeleteNetwork(name)
 }
 
+// CreateMacvlanNetwork creates a macvlan network on parent — instances on
+// it receive IPs directly from the router's DHCP (no NAT, no forwards).
+func (s *Service) CreateMacvlanNetwork(ctx context.Context, name, parent string) error {
+	post := api.NetworksPost{
+		NetworkPut: api.NetworkPut{
+			Config: map[string]string{
+				"parent":       parent,
+				"ipv4.address": "none",
+				"ipv6.address": "none",
+			},
+		},
+		Name: name,
+		Type: "macvlan",
+	}
+	return s.server.CreateNetwork(post)
+}
+
 // NetworkACLs lists all network ACLs (firewall rules).
 func (s *Service) NetworkACLs(ctx context.Context) ([]api.NetworkACL, error) {
 	return s.server.GetNetworkACLs()

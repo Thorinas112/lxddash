@@ -113,6 +113,12 @@ export const api = {
     remove: (id: string) => request<any>(`/forwards/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
 
+  lan: {
+    info: () => request<any>('/networks/lan-info'),
+    setup: (body: any) =>
+      request<any>('/networks/lan-setup', { method: 'POST', body: JSON.stringify(body) }),
+  },
+
   overview: () => request<any>('/dashboard/overview'),
 
   search: (q: string) => request<any[]>(`/search?q=${encodeURIComponent(q)}`),
@@ -289,6 +295,7 @@ export const api = {
     list: () => request<any[]>('/vms'),
     vm: (uuid: string) => request<any>(`/vms/${uuid}`),
     stats: () => request<any[]>('/vms/stats'),
+    networks: () => request<any[]>('/vms/networks'),
     create: (body: any) =>
       request<any>('/vms', { method: 'POST', body: JSON.stringify(body) }),
     isos: () => request<any[]>('/vms/isos'),

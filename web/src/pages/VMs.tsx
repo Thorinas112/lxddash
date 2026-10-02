@@ -445,6 +445,8 @@ function CreateVMModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [diskGb, setDiskGb] = useState('20')
   const [iso, setIso] = useState('')
   const [isos, setIsos] = useState<any[]>([])
+  const [network, setNetwork] = useState('default')
+  const [networks, setNetworks] = useState<any[]>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -453,6 +455,13 @@ function CreateVMModal({ onClose, onCreated }: { onClose: () => void; onCreated:
     api.vms
       .isos()
       .then((list) => setIsos(list))
+      .catch(() => {})
+    api.vms
+      .networks()
+      .then((list) => {
+        setNetworks(list)
+        if (list.some((n: any) => n.name === 'lan')) setNetwork('lan')
+      })
       .catch(() => {})
   }, [])
 
@@ -479,6 +488,7 @@ function CreateVMModal({ onClose, onCreated }: { onClose: () => void; onCreated:
         vcpus: parseInt(vcpus) || 2,
         disk_gb: parseInt(diskGb) || 20,
         iso: iso || undefined,
+        network: network || undefined,
       })
       onCreated()
     } catch (e: any) {
@@ -520,6 +530,20 @@ function CreateVMModal({ onClose, onCreated }: { onClose: () => void; onCreated:
                   <input value={diskGb} onChange={(e) => setDiskGb(e.target.value)} className={inputCls} />
                 </Field>
               </div>
+              <Field label="Network">
+                <select value={network} onChange={(e) => setNetwork(e.target.value)} className={inputCls}>
+                  <option value="default">default (NAT — unreachable from LAN)</option>
+                  {networks.map((n: any) => (
+                    <option key={n.name} value={n.name}>
+                      {n.name} {n.active ? '' : '(stopped)'}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Pick the <b>lan</b> network (Networks page → LAN access) to get an IP from your
+                  router's DHCP.
+                </p>
+              </Field>
             </div>
           ),
         },
@@ -565,6 +589,7 @@ function CreateVMModal({ onClose, onCreated }: { onClose: () => void; onCreated:
               <ReviewRow k="CPU" v={`${vcpus} core${vcpus === '1' ? '' : 's'}`} />
               <ReviewRow k="Disk" v={`${diskGb} GB`} />
               <ReviewRow k="ISO" v={iso || '(none)'} />
+              <ReviewRow k="Network" v={network} />
               {error && (
                 <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
                   {error}

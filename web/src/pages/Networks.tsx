@@ -17,7 +17,157 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </div>
   )
 }
+// LanSetupModal creates macvlan networks on the LAN interface so new
+// containers/VMs get IPs from the router's DHCP.
+function LanSetupModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [info, setInfo] = useState<any>(null)
+  const [lxdOn, setLxdOn] = useState(true)
+  const [libvirtOn, setLibvirtOn] = useState(true)
+  const [dockerOn, setDockerOn] = useState(true)
+  const [parent, setParent] = useState('')
+  const [subnet, setSubnet] = useState('')
+  const [gateway, setGateway] = useState('')
+  const [error, setError] = useState('')
+  const [results, setResults] = useState<Record<string, string> | null>(null)
+  const [busy, setBusy] = useState(false)
 
+  useEffect(() => {
+    api.lan
+      .info()
+      .then((i) => {
+        setInfo(i)
+        setParent(i.parent || '')
+        setSubnet(i.cidr || '')
+        setGateway(i.gateway || '')
+      })
+      .catch((e) => setError(e.message))
+  }, [])
+
+  async function submit() {
+    setBusy(true)
+    setError('')
+    try {
+      const res = await api.lan.setup({
+        parent,
+        runtimes: [lxdOn && 'lxd', libvirtOn && 'libvirt', dockerOn && 'docker'].filter(Boolean),
+        docker_subnet: subnet,
+        docker_gateway: gateway,
+      })
+      setResults(res.results || {})
+      onDone()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title="Set up LAN access (router DHCP)" onClose={onClose}>
+      <div className="space-y-4 text-sm">
+        <p className="text-gray-600">
+          Creates macvlan networks on the LAN interface so new LXD containers, VMs and Docker
+          containers receive IPs <b>directly from your router's DHCP</b> — reachable from your
+          PC without port forwards.
+        </p>
+        {info && (
+          <div className="rounded border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600">
+            Detected: parent <b>{info.parent}</b> · host {info.addr} · gateway{' '}
+            <b>{info.gateway}</b> · LAN {info.cidr}
+            <div className="mt-1">Interfaces: {(info.ifaces || []).join(', ') || '—'}</div>
+          </div>
+        )}
+        <div>
+          <label className="mb-1 block text-xs uppercase tracking-wide text-gray-500">
+            Parent interface
+          </label>
+          <select value={parent} onChange={(e) => setParent(e.target.value)} className={inputCls}>
+            {(info?.ifaces || []).map((i: string) => (
+              <option key={i} value={i}>
+                {i}
+              </option>
+            ))}
+            {parent && !(info?.ifaces || []).includes(parent) && <option value={parent}>{parent}</option>}
+          </select>
+        </div>
+        <div className="space-y-2">
+          {[
+            { on: lxdOn, set: setLxdOn, label: 'LXD network "lan"', note: 'appears in the instance create network dropdown' },
+            { on: libvirtOn, set: setLibvirtOn, label: 'libvirt network "lan"', note: 'selectable in the VM create wizard' },
+            { on: dockerOn, set: setDockerOn, label: 'Docker macvlan network "lan"', note: 'attach with docker run --network lan' },
+          ].map((row) => (
+            <label key={row.label} className="flex items-start gap-2 rounded border border-gray-200 p-2">
+              <input
+                type="checkbox"
+                checked={row.on}
+                onChange={(e) => row.set(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium text-gray-800">{row.label}</span>
+                <span className="block text-xs text-gray-500">{row.note}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {dockerOn && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Docker subnet">
+              <input
+                value={subnet}
+                onChange={(e) => setSubnet(e.target.value)}
+                className={inputCls}
+                placeholder="192.168.0.0/24"
+              />
+            </Field>
+            <Field label="Docker gateway">
+              <input
+                value={gateway}
+                onChange={(e) => setGateway(e.target.value)}
+                className={inputCls}
+                placeholder="192.168.0.1"
+              />
+            </Field>
+          </div>
+        )}
+        {dockerOn && (
+          <p className="text-xs text-amber-700">
+            Docker macvlan can collide with the router's DHCP pool — use a range the router never
+            hands out, or create reservations. macvlan containers are reachable from other LAN
+            devices but not from this host itself.
+          </p>
+        )}
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+            {error}
+          </div>
+        )}
+        {results && (
+          <div className="rounded border border-gray-200 bg-gray-50 p-3 text-xs">
+            {Object.entries(results).map(([k, v]) => (
+              <div key={k} className="flex justify-between py-0.5">
+                <span className="font-medium text-gray-700">{k}</span>
+                <span className={String(v).startsWith('error') ? 'text-red-600' : 'text-green-700'}>
+                  {String(v)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className={btnGhost}>
+            {results ? 'Close' : 'Cancel'}
+          </button>
+          {!results && (
+            <button onClick={submit} disabled={busy || !parent} className={btnPrimary}>
+              {busy ? 'Creating…' : 'Create networks'}
+            </button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
 export default function Networks() {
   const [networks, setNetworks] = useState<any[]>([])
   const [error, setError] = useState('')
@@ -27,6 +177,8 @@ export default function Networks() {
   const [forwards, setForwards] = useState<any[]>([])
   const [forwardOpen, setForwardOpen] = useState(false)
   const [instances, setInstances] = useState<any[]>([])
+  const [lanOpen, setLanOpen] = useState(false)
+  const [lan, setLan] = useState<any>(null)
 
   const load = useCallback(async () => {
     try {
@@ -52,11 +204,20 @@ export default function Networks() {
     }
   }, [])
 
+  const loadLan = useCallback(async () => {
+    try {
+      setLan(await api.lan.info())
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   useEffect(() => {
     load()
     loadForwards()
     loadInstances()
-  }, [load, loadForwards, loadInstances])
+    loadLan()
+  }, [load, loadForwards, loadInstances, loadLan])
 
   async function del(name: string) {
     if (!(await confirm(`Delete network ${name}?`))) return
@@ -96,6 +257,33 @@ export default function Networks() {
           {error}
         </div>
       )}
+
+      {/* LAN access (router DHCP) */}
+      <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium text-gray-900">LAN access (router DHCP)</div>
+            <div className="mt-0.5 text-xs text-gray-500">
+              {lan
+                ? `Parent ${lan.parent} · gateway ${lan.gateway} · ${lan.cidr || 'no IPv4 on parent'}`
+                : 'Detecting LAN…'}
+            </div>
+          </div>
+          <button onClick={() => setLanOpen(true)} className={btnAction('bg-emerald-100 text-emerald-700')}>
+            Set up
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-4 text-xs">
+          {(['lxd', 'libvirt', 'docker'] as const).map((rt) => (
+            <span key={rt} className="inline-flex items-center gap-1.5 text-gray-600">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${lan?.[rt]?.exists ? 'bg-green-500' : 'bg-gray-300'}`}
+              />
+              {rt} {lan?.[rt]?.exists ? `(${lan[rt].name || 'lan'})` : 'not set up'}
+            </span>
+          ))}
+        </div>
+      </div>
 
       {networks.length === 0 && (
         <div className="rounded-lg border border-gray-200 bg-white py-12 text-center text-sm text-gray-500 shadow-sm">
@@ -141,6 +329,12 @@ export default function Networks() {
         ))}
       </div>
 
+      {lanOpen && (
+        <LanSetupModal
+          onClose={() => setLanOpen(false)}
+          onDone={() => loadLan()}
+        />
+      )}
       {createOpen && (
         <CreateNetworkModal
           onClose={() => setCreateOpen(false)}

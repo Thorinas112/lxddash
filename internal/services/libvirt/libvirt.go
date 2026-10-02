@@ -585,6 +585,58 @@ func (s *Service) ConsoleName(ctx context.Context, uuid string) (string, error) 
 	return d.Name, nil
 }
 
+// NetworkInfo describes a libvirt virtual network.
+type NetworkInfo struct {
+	Name      string `json:"name"`
+	Active    bool   `json:"active"`
+	Autostart bool   `json:"autostart"`
+}
+
+// Networks lists libvirt virtual networks with status.
+func (s *Service) Networks(ctx context.Context) ([]NetworkInfo, error) {
+	names, err := s.l.ConnectListNetworks(1024)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]NetworkInfo, 0, len(names))
+	for _, name := range names {
+		n, err := s.l.NetworkLookupByName(name)
+		if err != nil {
+			continue
+		}
+		info := NetworkInfo{Name: name}
+		if active, err := s.l.NetworkIsActive(n); err == nil {
+			info.Active = active == 1
+		}
+		if auto, err := s.l.NetworkGetAutostart(n); err == nil {
+			info.Autostart = auto == 1
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
+// CreateLANNetwork defines + starts a macvlan network so VMs receive IPs
+// directly from the router's DHCP.
+func (s *Service) CreateLANNetwork(ctx context.Context, name, dev string) error {
+	xml := fmt.Sprintf(`<network>
+  <name>%s</name>
+  <forward mode='macvlan'>
+    <interface dev='%s'/>
+  </forward>
+  <bridge name='virbr-%s' stp='off' delay='0'/>
+</network>`, name, dev, name)
+	n, err := s.l.NetworkDefineXML(xml)
+	if err != nil {
+		return fmt.Errorf("define network: %w", err)
+	}
+	if err := s.l.NetworkCreate(n); err != nil {
+		return fmt.Errorf("start network: %w", err)
+	}
+	_ = s.l.NetworkSetAutostart(n, 1)
+	return nil
+}
+
 // IPAddress returns the VM's IPv4 address from the libvirt DHCP lease
 // table (works on NAT networks without a guest agent). Empty error when
 // the VM is stopped or has no lease.
@@ -618,7 +670,8 @@ type CreateRequest struct {
 	MemoryMB int    `json:"memory_mb"`
 	VCPUs    int    `json:"vcpus"`
 	DiskGB   int    `json:"disk_gb"`
-	ISO      string `json:"iso"` // filename in the ISO dir (optional)
+	ISO      string `json:"iso"`     // filename in the ISO dir (optional)
+	Network  string `json:"network"` // libvirt network name (optional, default)
 }
 
 // CreateVM creates a qcow2 disk, defines the domain in libvirt and returns
@@ -760,12 +813,16 @@ func (s *Service) buildDomainXML(req CreateRequest, diskPath string) string {
       <readonly/>
     </disk>`, isoPath)
 	}
+	network := req.Network
+	if network == "" {
+		network = "default"
+	}
 	return fmt.Sprintf(`<domain type='kvm'>
   <name>%s</name>
   <memory unit='MiB'>%d</memory>
   <vcpu placement='static'>%d</vcpu>
   <os>
-    <type arch='x86_64' machine='pc-q35-6.2'>hvm</type>
+    <type arch='x86_64' machine='%s'>hvm</type>
     <boot dev='hd'/>
     <boot dev='cdrom'/>
   </os>
@@ -778,19 +835,51 @@ func (s *Service) buildDomainXML(req CreateRequest, diskPath string) string {
       <target dev='vda' bus='virtio'/>
     </disk>%s
     <interface type='network'>
-      <source network='default'/>
+      <source network='%s'/>
       <model type='virtio'/>
     </interface>
     <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>
     <video><model type='qxl'/></video>
   </devices>
-</domain>`, req.Name, req.MemoryMB, req.VCPUs, diskPath, cdrom)
+</domain>`, req.Name, req.MemoryMB, req.VCPUs, latestQ35Machine(), diskPath, cdrom, network)
 }
 
 // ISO describes an install ISO available on the host.
 type ISO struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
+}
+
+// latestQ35Machine returns the newest pc-q35-X.Y machine type reported by
+// qemu-system-x86_64 — versioned types get deprecated over time. Falls back
+// to pc-q35-6.2 when detection is not possible. (Duplicated from the
+// proxmox package, which imports this one and cannot be imported back.)
+func latestQ35Machine() string {
+	out, err := exec.Command("qemu-system-x86_64", "-machine", "help").Output()
+	if err != nil {
+		return "pc-q35-6.2"
+	}
+	re := regexp.MustCompile(`^(pc-q35)-(\d+)\.(\d+)`)
+	best := ""
+	bestMajor, bestMinor := -1, -1
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if m := re.FindStringSubmatch(fields[0]); m != nil {
+			major, _ := strconv.Atoi(m[2])
+			minor, _ := strconv.Atoi(m[3])
+			if major > bestMajor || (major == bestMajor && minor > bestMinor) {
+				bestMajor, bestMinor = major, minor
+				best = fields[0]
+			}
+		}
+	}
+	if best == "" {
+		return "pc-q35-6.2"
+	}
+	return best
 }
 
 // ListISOs returns the ISO files in the configured ISO directory.

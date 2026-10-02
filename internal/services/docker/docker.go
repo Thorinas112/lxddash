@@ -401,6 +401,28 @@ func (s *Service) Networks(ctx context.Context) ([]network.Summary, error) {
 	return res.Items, nil
 }
 
+// CreateLANNetwork creates a macvlan network so containers receive IPs from
+// the router's DHCP pool. The subnet must sit inside the LAN but outside the
+// router's dynamic range (or backed by DHCP reservations) to avoid conflicts.
+func (s *Service) CreateLANNetwork(ctx context.Context, name, parent, subnet, gateway string) error {
+	prefix, err := netip.ParsePrefix(subnet)
+	if err != nil {
+		return fmt.Errorf("invalid subnet %q: %w", subnet, err)
+	}
+	gw, err := netip.ParseAddr(gateway)
+	if err != nil {
+		return fmt.Errorf("invalid gateway %q: %w", gateway, err)
+	}
+	_, err = s.cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{
+		Driver: "macvlan",
+		IPAM: &network.IPAM{
+			Config: []network.IPAMConfig{{Subnet: prefix, Gateway: gw}},
+		},
+		Options: map[string]string{"parent": parent},
+	})
+	return err
+}
+
 func (s *Service) Volumes(ctx context.Context) ([]volume.Volume, error) {
 	res, err := s.cli.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
