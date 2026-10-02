@@ -182,24 +182,34 @@ elif command -v ollama >/dev/null 2>&1 && ollama --version >/dev/null 2>&1 \
   fi
 else
   # Also reached when a previous run left a binary without the systemd
-  # unit (failed mid-download) — the official installer repairs that.
+  # unit (failed mid-download) — the installers below repair that.
   step "LLM runtime (Ollama)..."
-  echo "    installing via the official installer (retries flaky downloads)..."
   INSTALLED=0
-  for attempt in 1 2 3; do
-    if curl -fsSL https://ollama.com/install.sh | sh; then
+  if [[ -f "$REPO_DIR/deploy/ollama-install.sh" ]]; then
+    # Resumable installer (forces HTTP/1.1, continues partial downloads) —
+    # survives flaky connections where the official script's HTTP/2
+    # tarball download dies mid-stream (curl error 92).
+    echo "    installing via deploy/ollama-install.sh (HTTP/1.1 + resume)..."
+    if bash "$REPO_DIR/deploy/ollama-install.sh"; then
       INSTALLED=1
-      break
     fi
-    echo "    attempt $attempt failed — retrying in 5s..."
-    sleep 5
-  done
+  else
+    echo "    installing via the official installer (retries flaky downloads)..."
+    for attempt in 1 2 3; do
+      if curl -fsSL https://ollama.com/install.sh | sh; then
+        INSTALLED=1
+        break
+      fi
+      echo "    attempt $attempt failed — retrying in 5s..."
+      sleep 5
+    done
+  fi
   if [[ $INSTALLED -eq 1 ]] && command -v ollama >/dev/null 2>&1 && ollama --version >/dev/null 2>&1; then
     systemctl enable --now ollama 2>/dev/null || true
     echo "    Ollama installed — pull a model from the LLM page (e.g. llama3.2:1b)"
   else
-    echo "    warning: Ollama install failed after 3 attempts — LLM features unavailable." >&2
-    echo "    Retry later with: curl -fsSL https://ollama.com/install.sh | sh" >&2
+    echo "    warning: Ollama install failed — LLM features unavailable." >&2
+    echo "    Retry later with: sudo bash deploy/ollama-install.sh" >&2
   fi
 fi
 
