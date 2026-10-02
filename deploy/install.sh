@@ -173,17 +173,26 @@ fi
 # Models are pulled from the UI so the installer stays fast and light.
 if [[ $WITH_LLM -eq 0 ]]; then
   step "LLM runtime (Ollama) — skipped (--no-llm)"
-elif command -v ollama >/dev/null 2>&1; then
+elif command -v ollama >/dev/null 2>&1 && ollama --version >/dev/null 2>&1; then
   step "LLM runtime (Ollama) — already installed"
   systemctl enable --now ollama 2>/dev/null || true
 else
   step "LLM runtime (Ollama)..."
-  echo "    installing via the official installer (includes systemd service)..."
-  if curl -fsSL https://ollama.com/install.sh | sh; then
+  echo "    installing via the official installer (retries flaky downloads)..."
+  INSTALLED=0
+  for attempt in 1 2 3; do
+    if curl -fsSL https://ollama.com/install.sh | sh; then
+      INSTALLED=1
+      break
+    fi
+    echo "    attempt $attempt failed — retrying in 5s..."
+    sleep 5
+  done
+  if [[ $INSTALLED -eq 1 ]] && command -v ollama >/dev/null 2>&1 && ollama --version >/dev/null 2>&1; then
     systemctl enable --now ollama 2>/dev/null || true
     echo "    Ollama installed — pull a model from the LLM page (e.g. llama3.2:1b)"
   else
-    echo "    warning: Ollama install failed — LLM features will be unavailable." >&2
+    echo "    warning: Ollama install failed after 3 attempts — LLM features unavailable." >&2
     echo "    Retry later with: curl -fsSL https://ollama.com/install.sh | sh" >&2
   fi
 fi
