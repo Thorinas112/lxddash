@@ -17,32 +17,40 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-URL="https://ollama.com/download/ollama-linux-amd64.tar.zst"
+# Pin the version: the un-pinned URL serves "latest", whose CONTENT can
+# change between resume attempts (new release or inconsistent CDN ranges),
+# splicing mismatched bytes into a corrupt archive. Override with e.g.
+#   OLLAMA_VERSION=0.36.0 sudo -E bash deploy/ollama-install.sh
+OLLAMA_VERSION="${OLLAMA_VERSION:-0.35.0}"
+URL="https://ollama.com/download/ollama-linux-amd64.tar.zst?version=${OLLAMA_VERSION}"
 TGZ=/tmp/ollama-linux-amd64.tar.zst
 
-echo "==> Downloading Ollama (HTTP/1.1, resumable)..."
+echo "==> Downloading Ollama ${OLLAMA_VERSION} (HTTP/1.1, resumable)..."
+OK=0
 for attempt in $(seq 1 30); do
   # --speed-limit/--speed-time: abandon stalled streams after 15s below
   # 20KB/s so the resume loop restarts them instead of hanging for minutes
   # on a dead connection. -m caps any single attempt at 30 minutes.
   if curl -fL --http1.1 --retry 3 -C - --speed-limit 20000 --speed-time 15 -m 1800 -o "$TGZ" "$URL"; then
-    break
+    if zstd -t "$TGZ" >/dev/null 2>&1; then
+      OK=1
+      break
+    fi
+    echo "    archive corrupt — deleting and retrying from scratch..."
+    rm -f "$TGZ"
+    sleep 3
+    continue
   fi
   SIZE=$(stat -c%s "$TGZ" 2>/dev/null || echo 0)
   echo "    attempt $attempt incomplete (${SIZE} bytes so far) — resuming in 3s..."
   sleep 3
-  if [[ $attempt -eq 30 ]]; then
-    echo "error: download failed after 30 attempts — check connectivity/disk and re-run" >&2
-    exit 1
-  fi
 done
-
-echo "==> Verifying archive..."
-if ! zstd -t "$TGZ"; then
-  echo "error: archive corrupt — removed; re-run this script to resume" >&2
-  rm -f "$TGZ"
+if [[ $OK -ne 1 ]]; then
+  echo "error: download/verify failed after 30 attempts — check connectivity/disk and re-run" >&2
   exit 1
 fi
+
+echo "==> Archive verified (Ollama ${OLLAMA_VERSION})."
 
 echo "==> Installing binary to /usr/local..."
 id ollama >/dev/null 2>&1 || useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
