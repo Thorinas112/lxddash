@@ -74,19 +74,52 @@ if [[ $UPDATE -eq 1 && -d "$REPO_DIR/.git" ]]; then
   (cd "$REPO_DIR" && git pull --ff-only) || echo "warning: git pull failed — continuing with local source" >&2
 fi
 
-# Progress helpers: numbered phase banners with per-step + total timing.
+# Progress helpers: numbered phase banners, heartbeats for silent phases,
+# and a per-phase timing report for the finish box.
 STEP=0
 LAST_T=0
-step() {
-  STEP=$((STEP + 1))
-  echo ""
-  if [[ $STEP -eq 1 ]]; then
-    echo "==> [1/7] $*"
-  else
-    echo "==> [$STEP/7] $*  (previous step: $((SECONDS - LAST_T))s)"
+LAST_LABEL=""
+PHASE_REPORT=""
+HB_PID=""
+
+phase_done() {
+  if [[ -n "$LAST_LABEL" ]]; then
+    PHASE_REPORT+="   [$STEP] $LAST_LABEL — $((SECONDS - LAST_T))s"$'\n'
+    LAST_LABEL=""
   fi
+}
+
+step() {
+  phase_done
+  STEP=$((STEP + 1))
+  LAST_LABEL="$*"
+  echo ""
+  echo "==> [$STEP/7] $*"
   LAST_T=$SECONDS
 }
+
+# run_hb <label> <cmd...> — runs a command while printing a heartbeat line
+# every 20s, so long silent phases (snap downloads, go compiles) never look
+# frozen. Ctrl+C kills both the installer and the running command.
+run_hb() {
+  local label="$1"; shift
+  "$@" &
+  HB_PID=$!
+  local t0=$SECONDS next=20
+  while kill -0 "$HB_PID" 2>/dev/null; do
+    sleep 5
+    if (( SECONDS - t0 >= next )); then
+      echo "    ... $label still working ($((SECONDS - t0))s) — keep this terminal open"
+      next=$((next + 20))
+    fi
+  done
+  wait "$HB_PID"
+  local rc=$?
+  HB_PID=""
+  return $rc
+}
+trap '[[ -n "$HB_PID" ]] && kill "$HB_PID" 2>/dev/null' INT TERM
+trap 'echo "" >&2; echo "error: installer stopped unexpectedly (line $LINENO). It is safe to rerun: sudo bash deploy/install.sh" >&2' ERR
 
 # ---------------------------------------------------------------------------
 # 0. Prerequisites
@@ -106,11 +139,15 @@ if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
   exit 1
 fi
 
+echo "==> LXD Dash installer — repo $(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo 'unknown'), port $PORT"
+df -h / 2>/dev/null | awk 'NR==2 {print "    disk: "$4" free on "$6}'
+
 # ---------------------------------------------------------------------------
 # 1. System dependencies
 # ---------------------------------------------------------------------------
 if [[ $SKIP_DEPS -eq 0 ]]; then
   step "Installing system dependencies (apt)..."
+  echo "    (apt prints its own progress; first run downloads a few hundred MB)"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   # qemu-kvm is a virtual package on newer Ubuntu — request qemu-system-x86 explicitly
@@ -136,8 +173,12 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
 
   # LXD (snap)
   if ! command -v lxc >/dev/null 2>&1 && ! command -v lxd >/dev/null 2>&1; then
-    echo "==> Installing LXD (snap)..."
-    snap install lxd
+    echo "    installing snap lxd — the download itself is silent (usually 30-90s);"
+    echo "    a heartbeat line prints every 20s so you know it is alive:"
+    run_hb "snap lxd download+install" snap install lxd
+    echo "    snap lxd installed: $(snap list lxd 2>/dev/null | awk 'NR==2{print $2}')"
+  else
+    echo "    snap lxd already installed"
   fi
 
   # Initialise LXD (default storage pool + network) on first install
@@ -264,8 +305,8 @@ else
     echo "  Build one on your dev machine with: make cross" >&2
     exit 1
   fi
-  step "Compiling backend from source (about a minute)..."
-  (cd "$REPO_DIR" && go build -o bin/lxddash-linux ./cmd/server)
+  step "Compiling backend from source (first build is the longest)..."
+  run_hb "backend compile" bash -c "cd '$REPO_DIR' && go build -o bin/lxddash-linux ./cmd/server"
   BINARY="$REPO_DIR/bin/lxddash-linux"
   echo "    built $(basename "$BINARY")"
 fi
@@ -294,7 +335,7 @@ if [[ $NEED_WEB_BUILD -eq 1 ]]; then
   if ! command -v npm >/dev/null 2>&1; then
     apt-get install -y nodejs npm >/dev/null
   fi
-  (cd "$REPO_DIR/web" && npm install --no-audit --no-fund && npm run build)
+  run_hb "frontend build (npm + vite)" bash -c "cd '$REPO_DIR/web' && npm install --no-audit --no-fund && npm run build"
   echo "    frontend built in $((SECONDS - LAST_T))s"
 else
   echo "    frontend: using existing web/dist"
@@ -312,7 +353,9 @@ step "Configuring and starting the service..."
 # Wait for runtime sockets so the app doesn't start against services that
 # are still initialising (snap LXD in particular takes a few seconds) —
 # detection below and the app's eager connections both depend on this.
-echo "==> Waiting for service sockets..."
+echo "==> Waiting for service sockets (docker, lxd, libvirt)..."
+SOCK_WAITED=0
+SOCK_MISSING=0
 for i in $(seq 1 30); do
   missing=0
   [[ -S /var/run/docker.sock ]] || missing=1
@@ -322,8 +365,16 @@ for i in $(seq 1 30); do
     echo "    all sockets ready (${i}s)"
     break
   fi
+  SOCK_WAITED=$i
+  SOCK_MISSING=$missing
+  if (( i % 5 == 0 )); then
+    echo "    ... still waiting for runtime sockets (${i}s) — services finish starting in the background"
+  fi
   sleep 1
 done
+if [[ $SOCK_WAITED -eq 30 && $SOCK_MISSING -ne 0 ]]; then
+  echo "    warning: not all sockets appeared within 30s — continuing; a service may still be starting" >&2
+fi
 
 # Detect LXD socket (snap vs apt)
 LXD_SOCKET="/var/lib/lxd/unix.socket"
@@ -383,11 +434,13 @@ systemctl restart lxddash
 # ---------------------------------------------------------------------------
 sleep 1
 if systemctl is-active --quiet lxddash; then
+  phase_done
   IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
   echo
   echo "============================================================"
   echo " LXD Dash installed and running!"
   echo "   Duration:  ${SECONDS}s total"
+  printf "%s" "$PHASE_REPORT"
   echo "   URL:      http://${IP:-<server-ip>}:$PORT"
   echo "   First run: the browser will ask you to create the admin"
   echo "              account (username + password)"
