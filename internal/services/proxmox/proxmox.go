@@ -178,7 +178,11 @@ func (s *Service) Import(ctx context.Context, path string) (*Task, error) {
 			task.Message = err.Error()
 		} else {
 			task.Status = "done"
-			task.Message = "import completed"
+			// Keep the detailed final message when the import set one
+			// (e.g. compose-up path or 'no compose file found').
+			if task.Message == "" {
+				task.Message = "import completed"
+			}
 		}
 		task.UpdatedAt = time.Now()
 		s.mu.Unlock()
@@ -294,11 +298,54 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 
 	// Use lxc file push which handles the rootfs correctly (preserves boot).
 	pushEnv := append(os.Environ(), "PATH=/snap/bin:"+os.Getenv("PATH"))
-	cmd := exec.CommandContext(ctx, "lxc", "file", "push", "-r", rootfsDir+"/.", name+"/")
-	cmd.Env = pushEnv
-	_, _ = cmd.CombinedOutput()
-	// lxc file push returns exit 1 for some special files (sockets, etc)
-	// but still pushes the vast majority of files successfully.
+
+	// `lxc file push` reports nothing while it copies, so drive the progress
+	// bar from the container's real rootfs growth against the staged size.
+	// This also gives liveness: a frozen size means a stalled copy.
+	totalBytes := dirSize(rootfsDir)
+	pushDone := make(chan struct{})
+	go func() {
+		cmd := exec.CommandContext(ctx, "lxc", "file", "push", "-r", rootfsDir+"/.", name+"/")
+		cmd.Env = pushEnv
+		_, _ = cmd.CombinedOutput()
+		// lxc file push returns exit 1 for some special files (sockets, etc)
+		// but still pushes the vast majority of files successfully.
+		close(pushDone)
+	}()
+	lastSize := int64(0)
+	stallTicks := 0
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+pushLoop:
+	for {
+		select {
+		case <-pushDone:
+			break pushLoop
+		case <-ticker.C:
+			cur := containerRootfsSize(ctx, name, pushEnv)
+			if cur <= 0 {
+				continue // sample failed — keep last state
+			}
+			pct := 79.0
+			if totalBytes > 0 {
+				pct = 60 + 19*float64(cur)/float64(totalBytes)
+				if pct > 79 {
+					pct = 79
+				}
+			}
+			msg := fmt.Sprintf("copying rootfs: %s of ~%s", humanBytes(cur), humanBytes(totalBytes))
+			if cur <= lastSize {
+				stallTicks++
+				if stallTicks >= 6 {
+					msg += " — no growth for 30s, may be stalled"
+				}
+			} else {
+				stallTicks = 0
+			}
+			lastSize = cur
+			s.updateProgress(task, int(pct), msg)
+		}
+	}
 
 	dockerMsg := ""
 	s.updateProgress(task, 80, "checking for Docker installation")
@@ -350,6 +397,50 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 	}
 	s.updateProgress(task, 100, finalMsg)
 	return nil
+}
+
+// dirSize returns the total size in bytes of files under path (best-effort).
+func dirSize(path string) int64 {
+	out, err := exec.Command("du", "-sb", path).Output()
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return 0
+	}
+	n, _ := strconv.ParseInt(fields[0], 10, 64)
+	return n
+}
+
+// containerRootfsSize samples the running instance's rootfs size via the
+// lxc CLI — the growth of this number is the copy's real progress.
+func containerRootfsSize(ctx context.Context, name string, env []string) int64 {
+	cmd := exec.CommandContext(ctx, "lxc", "exec", name, "--", "du", "-sb", "/")
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return 0
+	}
+	n, _ := strconv.ParseInt(fields[0], 10, 64)
+	return n
+}
+
+// humanBytes renders byte counts for progress messages.
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	}
+	return fmt.Sprintf("%d B", n)
 }
 
 // importVM extracts a Proxmox QEMU backup (VMA) and defines the VM in libvirt.
