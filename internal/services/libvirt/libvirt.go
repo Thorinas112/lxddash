@@ -616,16 +616,51 @@ func (s *Service) Networks(ctx context.Context) ([]NetworkInfo, error) {
 	return out, nil
 }
 
-// CreateLANNetwork defines + starts a macvlan network so VMs receive IPs
-// directly from the router's DHCP.
+// CreateLANNetwork defines + starts a network so VMs receive IPs directly// from the router's DHCP. libvirt has no forward mode='macvlan' — the
+// supported pattern is a host-level macvlan device that the bridge-mode
+// network plugs guests into (unique MACs per VM, external DHCP).
 func (s *Service) CreateLANNetwork(ctx context.Context, name, dev string) error {
+	bridge := "br-" + name
+	// Host macvlan upper device on the physical NIC.
+	if _, err := exec.Command("ip", "link", "show", bridge).CombinedOutput(); err != nil {
+		if out2, err2 := exec.Command("ip", "link", "add", "link", dev, "name", bridge,
+			"type", "macvlan", "mode", "bridge").CombinedOutput(); err2 != nil {
+			return fmt.Errorf("create macvlan device %s on %s: %v: %s", bridge, dev, err2, strings.TrimSpace(string(out2)))
+		}
+	}
+	if out, err := exec.Command("ip", "link", "set", bridge, "up").CombinedOutput(); err != nil {
+		return fmt.Errorf("bring %s up: %v: %s", bridge, err, strings.TrimSpace(string(out)))
+	}
+
+	// Persist the device across reboots (libvirtd restarts the network
+	// itself via autostart, but the macvlan device must exist first).
+	unitName := "lxddash-net-" + name + ".service"
+	unit := fmt.Sprintf(`[Unit]
+Description=macvlan device for LXD Dash libvirt network %q
+After=network-online.target
+Before=libvirtd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/ip link add link %s name %s type macvlan mode bridge
+ExecStart=/sbin/ip link set %s up
+
+[Install]
+WantedBy=multi-user.target
+`, name, dev, bridge, bridge)
+	if err := os.WriteFile("/etc/systemd/system/"+unitName, []byte(unit), 0o644); err != nil {
+		return fmt.Errorf("write systemd unit: %w", err)
+	}
+	_ = exec.Command("systemctl", "daemon-reload").Run()
+	_ = exec.Command("systemctl", "enable", "--now", unitName).Run()
+
 	xml := fmt.Sprintf(`<network>
   <name>%s</name>
-  <forward mode='macvlan'>
-    <interface dev='%s'/>
-  </forward>
-  <bridge name='virbr-%s' stp='off' delay='0'/>
-</network>`, name, dev, name)
+  <forward mode='bridge'/>
+  <bridge name='%s'/>
+</network>`, name, bridge)
 	n, err := s.l.NetworkDefineXML(xml)
 	if err != nil {
 		return fmt.Errorf("define network: %w", err)

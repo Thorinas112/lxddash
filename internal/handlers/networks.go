@@ -101,35 +101,74 @@ func (h *Handlers) NetworkLanSetup(w http.ResponseWriter, r *http.Request) {
 
 	results := map[string]string{}
 	if want["lxd"] {
-		if h.deps.LXD == nil {
+		switch {
+		case h.deps.LXD == nil:
 			results["lxd"] = "skipped (lxd unavailable)"
-		} else if err := h.deps.LXD.CreateMacvlanNetwork(r.Context(), req.LXDName, req.Parent); err != nil {
-			results["lxd"] = "error: " + err.Error()
-		} else {
-			results["lxd"] = "created " + req.LXDName
-			h.logActivity("lxd", "create-network", req.LXDName, "macvlan LAN network created", nil)
+		default:
+			nets, nerr := h.deps.LXD.Networks(r.Context())
+			exists := nerr == nil
+			for _, n := range nets {
+				if n.Name == req.LXDName {
+					exists = true
+					break
+				}
+			}
+			if exists {
+				results["lxd"] = "already exists — kept"
+			} else if err := h.deps.LXD.CreateMacvlanNetwork(r.Context(), req.LXDName, req.Parent); err != nil {
+				results["lxd"] = "error: " + err.Error()
+			} else {
+				results["lxd"] = "created " + req.LXDName
+				h.logActivity("lxd", "create-network", req.LXDName, "macvlan LAN network created", nil)
+			}
 		}
 	}
 	if want["libvirt"] {
-		if h.deps.Libvirt == nil {
+		switch {
+		case h.deps.Libvirt == nil:
 			results["libvirt"] = "skipped (libvirt unavailable)"
-		} else if err := h.deps.Libvirt.CreateLANNetwork(r.Context(), req.LibvirtName, req.Parent); err != nil {
-			results["libvirt"] = "error: " + err.Error()
-		} else {
-			results["libvirt"] = "created " + req.LibvirtName
-			h.logActivity("vm", "create-network", req.LibvirtName, "macvlan LAN network created", nil)
+		default:
+			nets, nerr := h.deps.Libvirt.Networks(r.Context())
+			exists := nerr == nil
+			for _, n := range nets {
+				if n.Name == req.LibvirtName {
+					exists = true
+					break
+				}
+			}
+			if exists {
+				results["libvirt"] = "already exists — kept"
+			} else if err := h.deps.Libvirt.CreateLANNetwork(r.Context(), req.LibvirtName, req.Parent); err != nil {
+				results["libvirt"] = "error: " + err.Error()
+			} else {
+				results["libvirt"] = "created " + req.LibvirtName
+				h.logActivity("vm", "create-network", req.LibvirtName, "LAN network created", nil)
+			}
 		}
 	}
 	if want["docker"] {
-		if h.deps.Docker == nil {
+		switch {
+		case h.deps.Docker == nil:
 			results["docker"] = "skipped (docker unavailable)"
-		} else if req.DockerSubnet == "" || req.DockerGateway == "" {
+		case req.DockerSubnet == "" || req.DockerGateway == "":
 			results["docker"] = "error: subnet and gateway are required for docker macvlan"
-		} else if err := h.deps.Docker.CreateLANNetwork(r.Context(), req.DockerName, req.Parent, req.DockerSubnet, req.DockerGateway); err != nil {
-			results["docker"] = "error: " + err.Error()
-		} else {
-			results["docker"] = "created " + req.DockerName
-			h.logActivity("docker", "create-network", req.DockerName, "macvlan LAN network created", nil)
+		default:
+			nets, nerr := h.deps.Docker.Networks(r.Context())
+			exists := nerr == nil
+			for _, n := range nets {
+				if n.Name == req.DockerName {
+					exists = true
+					break
+				}
+			}
+			if exists {
+				results["docker"] = "already exists — kept"
+			} else if err := h.deps.Docker.CreateLANNetwork(r.Context(), req.DockerName, req.Parent, req.DockerSubnet, req.DockerGateway); err != nil {
+				results["docker"] = "error: " + err.Error()
+			} else {
+				results["docker"] = "created " + req.DockerName
+				h.logActivity("docker", "create-network", req.DockerName, "macvlan LAN network created", nil)
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"parent": req.Parent, "results": results})
