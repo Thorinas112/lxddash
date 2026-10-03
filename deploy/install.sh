@@ -117,9 +117,9 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
   apt-get install -y curl ca-certificates git qemu-system-x86 qemu-utils libvirt-daemon-system
 
   if [[ $WITH_PROXMOX -eq 1 ]]; then
-    # qemu-img (disk conversion) + lxc CLI (rootfs import into LXD)
-    # zstd/xz-utils/lzop decompress .vma archives before `vma extract`
-    apt-get install -y qemu-utils lxd-client zstd xz-utils lzop || true
+    # qemu-img (disk conversion) + decompressors for .vma archives.
+    # (No lxd-client: discontinued on newer Ubuntu — snap lxd ships the lxc CLI.)
+    apt-get install -y qemu-utils zstd xz-utils lzop || true
     # VM imports write qcow2 images + EFI NVRAM into the libvirt image dir;
     # make it group-writable (setgid) so the service user can create files.
     if [[ -d /var/lib/libvirt/images ]]; then
