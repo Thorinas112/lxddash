@@ -19,6 +19,7 @@ const catColors: Record<string, string> = {
   proxmox: 'bg-orange-100 text-orange-700',
   llm: 'bg-pink-100 text-pink-700',
   system: 'bg-gray-100 text-gray-600',
+  auth: 'bg-rose-100 text-rose-700',
   forward: 'bg-teal-100 text-teal-700',
   host: 'bg-red-100 text-red-700',
   systemd: 'bg-indigo-100 text-indigo-700',
@@ -54,6 +55,7 @@ export default function Activity() {
           className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700"
         >
           <option value="">All categories</option>
+          <option value="auth">Auth</option>
           <option value="docker">Docker</option>
           <option value="lxd">LXD</option>
           <option value="vm">VMs</option>
