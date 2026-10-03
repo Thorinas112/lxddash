@@ -25,6 +25,22 @@ OLLAMA_VERSION="${OLLAMA_VERSION:-0.35.0}"
 URL="https://ollama.com/download/ollama-linux-amd64.tar.zst?version=${OLLAMA_VERSION}"
 TGZ=/tmp/ollama-linux-amd64.tar.zst
 
+if [[ -n "${OLLAMA_TGZ:-}" ]]; then
+  # Optional: use a pre-downloaded archive (e.g. fetched at full speed on a
+  # workstation where the CDN is fast, then copied into a slow VM):
+  #   OLLAMA_TGZ=/tmp/ollama-linux-amd64.tar.zst sudo -E bash deploy/ollama-install.sh
+  if [[ ! -f "$OLLAMA_TGZ" ]]; then
+    echo "error: OLLAMA_TGZ file not found: $OLLAMA_TGZ" >&2
+    exit 1
+  fi
+  echo "==> Using pre-downloaded archive: $OLLAMA_TGZ"
+  cp "$OLLAMA_TGZ" "$TGZ"
+  if ! zstd -t "$TGZ" >/dev/null 2>&1; then
+    echo "error: provided archive is not a valid zstd archive — download ollama-linux-amd64.tar.zst (version ${OLLAMA_VERSION})" >&2
+    rm -f "$TGZ"
+    exit 1
+  fi
+else
 echo "==> Downloading Ollama ${OLLAMA_VERSION} (HTTP/1.1, resumable)..."
 OK=0
 for attempt in $(seq 1 30); do
@@ -51,6 +67,7 @@ if [[ $OK -ne 1 ]]; then
 fi
 
 echo "==> Archive verified (Ollama ${OLLAMA_VERSION})."
+fi
 
 echo "==> Installing binary to /usr/local..."
 id ollama >/dev/null 2>&1 || useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
