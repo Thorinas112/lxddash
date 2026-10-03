@@ -17,6 +17,7 @@ interface Instance {
   uptime_seconds?: number
   config?: Record<string, string>
   devices?: Record<string, { network?: string; 'ipv4.address'?: string }>
+  expanded_devices?: Record<string, any>
   state?: {
     network?: Record<string, { addresses?: { family: string; address: string }[] }>
     memory?: { usage?: number; total?: number }
@@ -926,7 +927,10 @@ function EditInstanceModal({
       .then((insts) => {
         const inst = insts.find((i: any) => i.name === name)
         if (!inst) return
-        const nic = inst.devices?.eth0
+        // NICs may live on the instance itself or be inherited from the
+        // default profile (expanded_devices) — imported containers use the
+        // profile path, so check both before falling back.
+        const nic = inst.devices?.eth0 || inst.expanded_devices?.eth0
         if (nic) {
           if (nic.network) setNetwork(nic.network)
           if (nic['ipv4.address']) setIpv4(nic['ipv4.address'])

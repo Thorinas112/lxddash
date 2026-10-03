@@ -335,6 +335,28 @@ func (h *Handlers) VMSetAutostart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// VMSetNetwork re-points a VM's NIC at a different libvirt network.
+func (h *Handlers) VMSetNetwork(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Libvirt == nil {
+		writeErr(w, http.StatusServiceUnavailable, "libvirt service unavailable")
+		return
+	}
+	var req struct {
+		Network string `json:"network"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Network == "" {
+		writeErr(w, http.StatusBadRequest, "network is required")
+		return
+	}
+	if err := h.deps.Libvirt.SetNetwork(r.Context(), r.PathValue("uuid"), req.Network); err != nil {
+		h.logActivity("vm", "set-network", r.PathValue("uuid"), "", err)
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	h.logActivity("vm", "set-network", r.PathValue("uuid"), "network set to "+req.Network, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // VMResize changes vCPU/memory of a VM.
 func (h *Handlers) VMResize(w http.ResponseWriter, r *http.Request) {
 	if h.deps.Libvirt == nil {

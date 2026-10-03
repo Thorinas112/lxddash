@@ -6,6 +6,7 @@ import AssistModal from '../components/AssistModal'
 import Badge from '../components/Badge'
 import LiveGraphsModal from '../components/LiveGraphsModal'
 import Modal from '../components/Modal'
+import VMNetworkModal from '../components/VMNetworkModal'
 import Spinner from '../components/Spinner'
 import Wizard from '../components/Wizard'
 import { btnAction, btnGhost, btnPrimary, inputCls } from '../components/ui'
@@ -60,6 +61,7 @@ export default function VMs() {
   const [resizeFor, setResizeFor] = useState<VM | null>(null)
   const [graphsFor, setGraphsFor] = useState<string | null>(null)
   const [portsFor, setPortsFor] = useState<VM | null>(null)
+  const [networkFor, setNetworkFor] = useState<VM | null>(null)
   const [vmTags, setVmTags] = useState<Record<string, string[]>>({})
   const prevCpu = useRef<Record<string, { usage: number; t: number; cpus: number }>>({})
   const navigate = useNavigate()
@@ -308,6 +310,12 @@ export default function VMs() {
                         Resize
                       </button>
                       <button
+                        onClick={() => setNetworkFor(v)}
+                        className={btnAction('bg-fuchsia-100 text-fuchsia-700')}
+                      >
+                        Network
+                      </button>
+                      <button
                         onClick={() => setPortsFor(v)}
                         className={btnAction('bg-cyan-100 text-cyan-700')}
                       >
@@ -391,6 +399,18 @@ export default function VMs() {
         <PortsModal
           vm={portsFor}
           onClose={() => setPortsFor(null)}
+        />
+      )}
+      {networkFor && (
+        <VMNetworkModal
+          uuid={networkFor.uuid}
+          name={networkFor.name}
+          state={networkFor.state}
+          onClose={() => setNetworkFor(null)}
+          onSaved={() => {
+            setNetworkFor(null)
+            load()
+          }}
         />
       )}
       {graphsFor && (

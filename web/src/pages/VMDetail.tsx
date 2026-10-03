@@ -5,6 +5,7 @@ import { api } from '../api/client'
 import { confirm } from '../components/ConfirmDialog'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'
+import VMNetworkModal from '../components/VMNetworkModal'
 import { btnAction, btnPrimary, inputCls } from '../components/ui'
 
 type Tab = 'overview' | 'snapshots' | 'console' | 'graphs'
@@ -50,6 +51,7 @@ export default function VMDetail() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [tab, setTab] = useState<Tab>('overview')
+  const [networkOpen, setNetworkOpen] = useState(false)
 
   // Snapshots state
   const [snapshots, setSnapshots] = useState<any[]>([])
@@ -179,8 +181,8 @@ export default function VMDetail() {
               </button>
             </>
           )}
-          <button onClick={() => setTab('snapshots')} className={btnAction('bg-teal-100 text-teal-700')}>
-            Edit
+          <button onClick={() => setNetworkOpen(true)} className={btnAction('bg-fuchsia-100 text-fuchsia-700')}>
+            Network
           </button>
           <button onClick={remove} disabled={!!busy} className={btnAction('bg-red-100 text-red-700')}>
             {busy === 'remove' ? <Spinner /> : 'Delete'}
@@ -325,6 +327,19 @@ export default function VMDetail() {
             </div>
           )}
         </div>
+      )}
+
+      {networkOpen && (
+        <VMNetworkModal
+          uuid={uuid}
+          name={vm?.name || ''}
+          state={vm?.state || ''}
+          onClose={() => setNetworkOpen(false)}
+          onSaved={() => {
+            setNetworkOpen(false)
+            load()
+          }}
+        />
       )}
 
       {/* === SNAPSHOTS TAB === */}

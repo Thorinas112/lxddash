@@ -296,6 +296,8 @@ export const api = {
     vm: (uuid: string) => request<any>(`/vms/${uuid}`),
     stats: () => request<any[]>('/vms/stats'),
     networks: () => request<any[]>('/vms/networks'),
+    setNetwork: (uuid: string, body: any) =>
+      request<any>(`/vms/${uuid}/network`, { method: 'POST', body: JSON.stringify(body) }),
     create: (body: any) =>
       request<any>('/vms', { method: 'POST', body: JSON.stringify(body) }),
     isos: () => request<any[]>('/vms/isos'),

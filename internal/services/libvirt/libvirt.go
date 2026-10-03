@@ -515,6 +515,38 @@ func (s *Service) SetAutostart(ctx context.Context, uuid string, enabled bool) e
 	return s.l.DomainSetAutostart(d, v)
 }
 
+// SetNetwork re-points a VM's NIC at a different libvirt network. The VM
+// must be shut off — the domain is redefined with the new source.
+func (s *Service) SetNetwork(ctx context.Context, uuid, network string) error {
+	d, err := s.domainByUUID(uuid)
+	if err != nil {
+		return err
+	}
+	if _, err := s.l.NetworkLookupByName(network); err != nil {
+		return fmt.Errorf("network %q not found", network)
+	}
+	state, _, err := s.l.DomainGetState(d, 0)
+	if err != nil {
+		return err
+	}
+	if libvirt.DomainState(state) != libvirt.DomainShutoff {
+		return fmt.Errorf("VM must be shut off to change its network")
+	}
+	xmlDesc, err := s.l.DomainGetXMLDesc(d, 0)
+	if err != nil {
+		return err
+	}
+	re := regexp.MustCompile(`<source network='[^']*'/>`)
+	if !re.MatchString(xmlDesc) {
+		return fmt.Errorf("no network interface found in the VM config")
+	}
+	updated := re.ReplaceAllString(xmlDesc, fmt.Sprintf("<source network='%s'/>", network))
+	if _, err := s.l.DomainDefineXML(updated); err != nil {
+		return fmt.Errorf("redefine domain: %w", err)
+	}
+	return nil
+}
+
 // ResizeRequest describes a VM resource change.
 type ResizeRequest struct {
 	VCPUs    *uint32 `json:"vcpus,omitempty"`

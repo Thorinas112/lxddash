@@ -300,6 +300,7 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 	// lxc file push returns exit 1 for some special files (sockets, etc)
 	// but still pushes the vast majority of files successfully.
 
+	dockerMsg := ""
 	s.updateProgress(task, 80, "checking for Docker installation")
 	// Post-import: if Docker was in the backup, reinstall it since the rootfs
 	// push can't reliably transfer Docker's special files and large /var/lib/docker.
@@ -310,26 +311,44 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 			"curl -fsSL https://get.docker.com | sh 2>&1 | tail -5"})
 
 		s.updateProgress(task, 90, "restoring Docker configuration")
-		// Push Docker config from backup.
 		dockerConfSrc := filepath.Join(rootfsDir, "etc", "docker", "daemon.json")
 		if data, err := os.ReadFile(dockerConfSrc); err == nil {
 			_ = s.lxd.WriteFile(ctx, name, "/etc/docker/daemon.json", data, 0o644)
 		}
-		// Push docker-compose.yml if present and recreate containers.
-		composeSrc := filepath.Join(rootfsDir, "home", "mark", "docker-compose.yml")
-		if data, err := os.ReadFile(composeSrc); err == nil {
+		// Find a compose file anywhere sensible in the rootfs — the old
+		// hardcoded /home/mark path only matched the WSL test environment.
+		composeSrc := ""
+		for _, pattern := range []string{
+			"/root/docker-compose.y*ml",
+			"/root/compose/docker-compose.y*ml",
+			"/home/*/docker-compose.y*ml",
+			"/home/*/*/docker-compose.y*ml",
+		} {
+			if matches, _ := filepath.Glob(filepath.Join(rootfsDir, pattern)); len(matches) > 0 {
+				composeSrc = matches[0]
+				break
+			}
+		}
+		if composeSrc != "" {
+			rel := strings.TrimPrefix(composeSrc, rootfsDir)
+			data, _ := os.ReadFile(composeSrc)
 			_ = s.lxd.WriteFile(ctx, name, "/root/docker-compose.yml", data, 0o644)
-			s.updateProgress(task, 95, "recreating Docker containers from compose file")
+			s.updateProgress(task, 95, "recreating containers from "+rel+" (images re-pull automatically)")
 			_, _ = s.lxd.ExecOutput(ctx, name, []string{"sh", "-c",
-				"systemctl start docker && cd /root && docker compose up -d 2>&1 | tail -5"})
+				"systemctl start docker && cd /root && docker compose up -d 2>&1 | tail -8"})
+			dockerMsg = "docker reinstalled; compose up from " + rel
 		} else {
-			// No compose file — just start Docker daemon.
 			_, _ = s.lxd.ExecOutput(ctx, name, []string{"sh", "-c", "systemctl start docker"})
+			dockerMsg = "docker reinstalled — no compose file found in backup; recreate containers manually"
 		}
 		s.updateProgress(task, 98, "Docker installed and running")
 	}
 
-	s.updateProgress(task, 100, "container imported successfully")
+	finalMsg := "container imported successfully"
+	if dockerMsg != "" {
+		finalMsg += " — " + dockerMsg
+	}
+	s.updateProgress(task, 100, finalMsg)
 	return nil
 }
 
