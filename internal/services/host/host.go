@@ -331,7 +331,7 @@ type DiskInfo struct {
 	Name       string `json:"name"`
 	Model      string `json:"model"`
 	Size       uint64 `json:"size"`
-	Type       string `json:"type"` // "ssd" | "hdd" | "nvme" | "unknown"
+	Type       string `json:"type"`   // "ssd" | "hdd" | "nvme" | "unknown"
 	Health     string `json:"health"` // "PASSED" | "FAILED" | "unknown"
 	TempC      int    `json:"temp_c"`
 	ReadErrors uint64 `json:"read_errors"`

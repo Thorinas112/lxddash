@@ -24,3 +24,6 @@ data/
 # WSL temp
 /tmp/
 /lxddash-log.txt
+
+# Stray build artifacts (e.g. `go build ./cmd/resetpass` in the repo root)
+/resetpass

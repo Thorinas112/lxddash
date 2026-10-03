@@ -677,6 +677,26 @@ func (s *Service) CreateMacvlanNetwork(ctx context.Context, name, parent string)
 	return s.server.CreateNetwork(post)
 }
 
+// EnsureImageAlias makes sure the given local image alias exists, pulling
+// copyFrom (e.g. "ubuntu:24.04") via the lxc CLI when missing. Returns true
+// when a pull happened. Used by Proxmox LXC imports on fresh servers that
+// never pulled the base image instances are created from.
+func (s *Service) EnsureImageAlias(ctx context.Context, alias, copyFrom string) (bool, error) {
+	if _, _, err := s.server.GetImageAlias(alias); err == nil {
+		return false, nil // already present
+	}
+	cmd := exec.CommandContext(ctx, "lxc", "image", "copy", copyFrom, "local:", "--alias", alias)
+	cmd.Env = append(os.Environ(), "PATH=/snap/bin:"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("pulling base image %s from %s: %v: %s — pull it manually with: lxc image copy %s local: --alias %s",
+			alias, copyFrom, err, strings.TrimSpace(string(out)), copyFrom, alias)
+	}
+	if _, _, err := s.server.GetImageAlias(alias); err != nil {
+		return false, fmt.Errorf("image %s still missing after pull — run: lxc image copy %s local: --alias %s", alias, copyFrom, alias)
+	}
+	return true, nil
+}
+
 // NetworkACLs lists all network ACLs (firewall rules).
 func (s *Service) NetworkACLs(ctx context.Context) ([]api.NetworkACL, error) {
 	return s.server.GetNetworkACLs()

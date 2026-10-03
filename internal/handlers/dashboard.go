@@ -7,12 +7,12 @@ import (
 )
 
 type overview struct {
-	Host        any `json:"host"`
-	DockerCount int `json:"docker_count"`
+	Host        any  `json:"host"`
+	DockerCount int  `json:"docker_count"`
 	DockerOK    bool `json:"docker_ok"` // service reachable, even with 0 containers
-	LXDCount    int `json:"lxd_count"`
+	LXDCount    int  `json:"lxd_count"`
 	LXDOK       bool `json:"lxd_ok"` // service reachable, even with 0 instances
-	VMCount     int `json:"vm_count"`
+	VMCount     int  `json:"vm_count"`
 	LibvirtOK   bool `json:"libvirt_ok"` // service reachable, even with 0 VMs
 }
 

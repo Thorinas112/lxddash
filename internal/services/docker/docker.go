@@ -312,9 +312,9 @@ func (s *Service) StartPull(ref string) (*PullTask, error) {
 		dec := json.NewDecoder(rc)
 		for {
 			var msg struct {
-				ID     string `json:"id"`
-				Status string `json:"status"`
-				Error  string `json:"error"`
+				ID             string `json:"id"`
+				Status         string `json:"status"`
+				Error          string `json:"error"`
 				ProgressDetail struct {
 					Current int64 `json:"current"`
 					Total   int64 `json:"total"`

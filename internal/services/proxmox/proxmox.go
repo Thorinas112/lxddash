@@ -250,6 +250,18 @@ func (s *Service) importCT(ctx context.Context, path string, task *Task) error {
 		name = fmt.Sprintf("pve-ct-%d", task.VMID)
 	}
 
+	// Fresh servers never pulled the base image that instances are created
+	// from — pull it automatically (first import only) instead of dying with
+	// LXD's cryptic "Image not provided for instance creation".
+	s.updateProgress(task, 25, "checking base image (ubuntu-minimal)")
+	pulled, err := s.lxd.EnsureImageAlias(ctx, "ubuntu-minimal", "ubuntu:24.04")
+	if err != nil {
+		return err
+	}
+	if pulled {
+		s.updateProgress(task, 28, "pulled base image ubuntu-minimal (first import)")
+	}
+
 	s.updateProgress(task, 30, fmt.Sprintf("creating LXD container %q", name))
 	instReq := lxd.CreateRequest{
 		Name: name,
